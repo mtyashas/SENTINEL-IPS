@@ -1,0 +1,41 @@
+GDPR ARTICLE 33 — DATA BREACH NOTIFICATION
+============================================================
+Report ID    : GDPR-20260527092722
+Generated    : 2026-05-27T09:27:22.848635+00:00
+Organisation : Unknown Organisation
+DPO Contact  : dpo@example.com
+Deadline     : Within 72 hours of becoming aware of the breach
+
+SECTION 1 — NATURE OF THE PERSONAL DATA BREACH
+------------------------------------------------------------
+Description  : SENTINEL IPS demo incident -- multiple attack vectors detected
+Attack Types : Unknown, PortScan, DoS, DDoS, Bot, BruteForce, Heartbleed, Infiltration, WebAttack
+Period       : 2026-05-27T09:27:22.842051+00:00 to 2026-05-27T09:27:22.844116+00:00
+Sources      : ANON-B662BFB9276F, ANON-43EF0D6C6C22, ANON-B5150E207B18, ANON-E3D1DAA74931, ANON-D33D16830321, ANON-B4FDE665C27F, ANON-A58C1EAC122E, ANON-BA298808ECE9, ANON-DB0A32A77CD5, ANON-8DC396053B15 (IPs pseudonymised)
+
+SECTION 2 — CATEGORIES AND NUMBER OF DATA SUBJECTS
+------------------------------------------------------------
+Approximate subjects : 120
+Data categories      : IP address, network flow metadata
+Affected persons     : Users of protected systems
+
+SECTION 3 — LIKELY CONSEQUENCES
+------------------------------------------------------------
+Severity     : HIGH — Likely requires notification to supervisory authority AND data subjects
+  - Potential unauthorised access to personal data
+  - Temporary loss of availability of services
+  - Potential credential compromise or session hijacking
+  - Potential persistent access by threat actor
+
+SECTION 4 — MEASURES TAKEN AND PROPOSED
+------------------------------------------------------------
+Measures taken:
+  [X] Malicious IP addresses automatically blocked by SENTINEL IPS
+  [X] Affected connections terminated
+  [X] Full packet capture preserved as forensic evidence
+  [X] Incident timeline reconstructed
+  [X] Adaptive model retrain scheduled to prevent recurrence
+Measures proposed:
+  [ ] Review and harden firewall rules
+  [ ] Notify affected data subjects if high-risk breach confirmed
+  [ ] Conduct penetration test to identify remaining vulnerabilities

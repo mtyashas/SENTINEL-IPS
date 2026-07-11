@@ -1,0 +1,13 @@
+﻿__pycache__/
+*.pyc
+venv/
+.venv/
+.env
+datasets/
+models/*.pkl
+models/*.h5
+models/*.pt
+logs/
+*.pcap
+
+.claude/settings.local.json

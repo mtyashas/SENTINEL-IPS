@@ -1,0 +1,69 @@
+{
+  "schema": "ISO27001-A16-v1.0",
+  "report_id": "ISO-20260526075835",
+  "generated_at": "2026-05-26T07:58:35.556087+00:00",
+  "organisation": "Unknown Organisation",
+  "responder": "SENTINEL IPS (automated demo)",
+  "incident": {
+    "campaign_id": "demo-campaign",
+    "classification": "A.16.1.5 \u2014 Response to information security incidents",
+    "severity": "HIGH",
+    "start_time": "2026-05-26T07:58:35.547197+00:00",
+    "end_time": "2026-05-26T07:58:35.549093+00:00",
+    "duration_min": 0.0,
+    "event_count": 500,
+    "attack_types": [
+      "Unknown",
+      "PortScan",
+      "DoS",
+      "DDoS",
+      "Bot",
+      "BruteForce",
+      "Heartbleed",
+      "Infiltration",
+      "WebAttack"
+    ],
+    "kill_chain_stages": [
+      "Initial Access",
+      "Persistence",
+      "Defense Evasion",
+      "Discovery",
+      "Lateral Movement",
+      "Impact"
+    ],
+    "sophistication": "APT"
+  },
+  "detection_and_containment": {
+    "detected_by": "SENTINEL IPS v2.0 \u2014 automated ML + signature detection",
+    "containment_actions": [
+      "Malicious source IPs automatically blocked via OS firewall",
+      "Active TCP connections terminated",
+      "Rate limiting applied to suspicious traffic flows",
+      "Session tokens for potentially compromised accounts revoked"
+    ]
+  },
+  "eradication_and_recovery": {
+    "root_cause": "External attacker exploitation -- automated response engaged",
+    "eradication": [
+      "Block all identified malicious IP ranges at perimeter firewall",
+      "Reset passwords for all accounts accessed during the incident window",
+      "Identify and clean all C2-beaconing endpoints",
+      "Patch OpenSSL and revoke/reissue TLS certificates"
+    ],
+    "recovery_status": "Automated response completed; manual review recommended"
+  },
+  "lessons_learned": {
+    "corrective_actions": [
+      "Update IDS/IPS signatures with patterns from this incident",
+      "Review and tighten firewall and WAF rules",
+      "Engage threat-hunting team for deeper investigation",
+      "Implement network micro-segmentation to limit lateral movement",
+      "Enforce MFA on all externally-facing authentication endpoints"
+    ],
+    "preventive_measures": [
+      "Adaptive model retrain scheduled to improve future detection",
+      "Zero-day patterns added to threat intelligence feed",
+      "Attacker profiles updated for future correlation"
+    ]
+  }
+}

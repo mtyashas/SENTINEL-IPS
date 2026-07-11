@@ -1,0 +1,7 @@
+# Known phishing domains — updated from threat intelligence feeds
+# Format: one domain per line, comments prefixed with #
+secure-login-paypa1.com
+bankofamerica-verify-account.tk
+microsoft-support-alert.xyz
+amazon-prize-winner-2024.info
+apple-id-locked-verify.ml

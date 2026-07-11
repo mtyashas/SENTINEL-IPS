@@ -1,0 +1,50 @@
+ISO/IEC 27001 ANNEX A.16 — INFORMATION SECURITY INCIDENT REPORT
+============================================================
+Report ID      : ISO-20260523014232
+Generated      : 2026-05-23T01:42:32.971980+00:00
+Organisation   : Unknown Organisation
+Responder      : SENTINEL IPS (automated demo)
+
+1. INCIDENT IDENTIFICATION
+------------------------------------------------------------
+Campaign ID    : demo-campaign
+Classification : A.16.1.5 — Response to information security incidents
+Severity       : HIGH
+Period         : 2026-05-23T01:42:32.963338+00:00 to 2026-05-23T01:42:32.965130+00:00
+Duration       : 0.0 min
+Events         : 500
+Attack Types   : Unknown, PortScan, DoS, DDoS, Bot, BruteForce, Heartbleed, Infiltration, WebAttack
+Kill-Chain     : Initial Access -> Persistence -> Defense Evasion -> Discovery -> Lateral Movement -> Impact
+Sophistication : APT
+
+2. DETECTION AND CONTAINMENT
+------------------------------------------------------------
+Detected by    : SENTINEL IPS v2.0 — automated ML + signature detection
+Containment:
+  [X] Malicious source IPs automatically blocked via OS firewall
+  [X] Active TCP connections terminated
+  [X] Rate limiting applied to suspicious traffic flows
+  [X] Session tokens for potentially compromised accounts revoked
+
+3. ERADICATION AND RECOVERY
+------------------------------------------------------------
+Root Cause     : External attacker exploitation -- automated response engaged
+Recovery       : Automated response completed; manual review recommended
+Eradication:
+  [ ] Block all identified malicious IP ranges at perimeter firewall
+  [ ] Reset passwords for all accounts accessed during the incident window
+  [ ] Identify and clean all C2-beaconing endpoints
+  [ ] Patch OpenSSL and revoke/reissue TLS certificates
+
+4. LESSONS LEARNED
+------------------------------------------------------------
+Corrective actions:
+  [ ] Update IDS/IPS signatures with patterns from this incident
+  [ ] Review and tighten firewall and WAF rules
+  [ ] Engage threat-hunting team for deeper investigation
+  [ ] Implement network micro-segmentation to limit lateral movement
+  [ ] Enforce MFA on all externally-facing authentication endpoints
+Preventive measures:
+  [ ] Adaptive model retrain scheduled to improve future detection
+  [ ] Zero-day patterns added to threat intelligence feed
+  [ ] Attacker profiles updated for future correlation

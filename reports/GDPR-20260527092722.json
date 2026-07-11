@@ -1,0 +1,70 @@
+{
+  "schema": "GDPR-Art33-v1.0",
+  "report_id": "GDPR-20260527092722",
+  "generated_at": "2026-05-27T09:27:22.848635+00:00",
+  "organisation": "Unknown Organisation",
+  "dpo_contact": "dpo@example.com",
+  "notification_deadline": "Within 72 hours of becoming aware of the breach",
+  "section_1_nature_of_breach": {
+    "description": "SENTINEL IPS demo incident -- multiple attack vectors detected",
+    "attack_types": [
+      "Unknown",
+      "PortScan",
+      "DoS",
+      "DDoS",
+      "Bot",
+      "BruteForce",
+      "Heartbleed",
+      "Infiltration",
+      "WebAttack"
+    ],
+    "breach_start": "2026-05-27T09:27:22.842051+00:00",
+    "breach_end": "2026-05-27T09:27:22.844116+00:00",
+    "source_identifiers": [
+      "ANON-B662BFB9276F",
+      "ANON-43EF0D6C6C22",
+      "ANON-B5150E207B18",
+      "ANON-E3D1DAA74931",
+      "ANON-D33D16830321",
+      "ANON-B4FDE665C27F",
+      "ANON-A58C1EAC122E",
+      "ANON-BA298808ECE9",
+      "ANON-DB0A32A77CD5",
+      "ANON-8DC396053B15"
+    ],
+    "ip_pseudonymised": true
+  },
+  "section_2_data_subjects": {
+    "approximate_count": 120,
+    "categories_of_data": [
+      "IP address",
+      "network flow metadata"
+    ],
+    "categories_of_people": [
+      "Users of protected systems"
+    ]
+  },
+  "section_3_consequences": {
+    "likely_consequences": [
+      "Potential unauthorised access to personal data",
+      "Temporary loss of availability of services",
+      "Potential credential compromise or session hijacking",
+      "Potential persistent access by threat actor"
+    ],
+    "severity": "HIGH \u2014 Likely requires notification to supervisory authority AND data subjects"
+  },
+  "section_4_measures": {
+    "measures_taken": [
+      "Malicious IP addresses automatically blocked by SENTINEL IPS",
+      "Affected connections terminated",
+      "Full packet capture preserved as forensic evidence",
+      "Incident timeline reconstructed",
+      "Adaptive model retrain scheduled to prevent recurrence"
+    ],
+    "measures_proposed": [
+      "Review and harden firewall rules",
+      "Notify affected data subjects if high-risk breach confirmed",
+      "Conduct penetration test to identify remaining vulnerabilities"
+    ]
+  }
+}

@@ -1,0 +1,2 @@
+# Tor exit nodes — populated at runtime from https://check.torproject.org/exit-addresses
+# This file is overwritten on each startup by intelligence/threat_feeds.py
