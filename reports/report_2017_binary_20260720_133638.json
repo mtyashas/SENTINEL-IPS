@@ -1,0 +1,79 @@
+{
+  "experiment": "2017_binary",
+  "n_samples": 2400,
+  "timestamp": "20260720_133638",
+  "metrics": {
+    "accuracy": 0.9983,
+    "precision": 0.995,
+    "recall": 0.9983,
+    "f1": 0.9967,
+    "roc_auc": 1.0,
+    "avg_precision": 1.0,
+    "brier_score": 0.0012,
+    "fp_rate": 0.0017,
+    "fn_rate": 0.0017,
+    "tp": 599,
+    "tn": 1797,
+    "fp": 3,
+    "fn": 1,
+    "f1_macro": 0.0,
+    "f1_weighted": 0.0
+  },
+  "throughput_fps": 0.0,
+  "eval_latency_s": 0.027,
+  "benchmark": {
+    "overall_pass": true,
+    "checks": [
+      {
+        "metric": "accuracy",
+        "target": 0.9969,
+        "actual": 0.9983,
+        "delta": 0.0014,
+        "passed": true
+      },
+      {
+        "metric": "precision",
+        "target": 0.9853,
+        "actual": 0.995,
+        "delta": 0.0097,
+        "passed": true
+      },
+      {
+        "metric": "recall",
+        "target": 0.9968,
+        "actual": 0.9983,
+        "delta": 0.0015,
+        "passed": true
+      },
+      {
+        "metric": "f1",
+        "target": 0.991,
+        "actual": 0.9967,
+        "delta": 0.0057,
+        "passed": true
+      },
+      {
+        "metric": "roc_auc",
+        "target": 0.9999,
+        "actual": 1.0,
+        "delta": 0.0001,
+        "passed": true
+      },
+      {
+        "metric": "fp_rate",
+        "target": 0.0031,
+        "actual": 0.0017,
+        "delta": -0.0014,
+        "passed": true
+      },
+      {
+        "metric": "fn_rate",
+        "target": 0.0032,
+        "actual": 0.0017,
+        "delta": -0.0015,
+        "passed": true
+      }
+    ],
+    "summary": "Benchmark validation for '2017_binary': 7/7 checks passed (PASS)\n  [OK] accuracy        target=0.9969  actual=0.9983  delta=+0.0014\n  [OK] precision       target=0.9853  actual=0.9950  delta=+0.0097\n  [OK] recall          target=0.9968  actual=0.9983  delta=+0.0015\n  [OK] f1              target=0.9910  actual=0.9967  delta=+0.0057\n  [OK] roc_auc         target=0.9999  actual=1.0000  delta=+0.0001\n  [OK] fp_rate         target=0.0031  actual=0.0017  delta=-0.0014\n  [OK] fn_rate         target=0.0032  actual=0.0017  delta=-0.0015"
+  }
+}
