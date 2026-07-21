@@ -341,6 +341,10 @@ class PacketLogger:
         """
         try:
             from scapy.sendrecv import AsyncSniffer  # type: ignore
+            # Registers Ether/IP into scapy's conf.l2types before the capture
+            # socket opens — see core/flow_collector.py's module docstring for
+            # why this must happen before AsyncSniffer.start(), not after.
+            from scapy.layers.inet import IP  # noqa: F401
         except ImportError:
             logger.warning("Scapy not available — live capture disabled")
             return False

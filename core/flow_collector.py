@@ -53,6 +53,18 @@ from config import (
     FLOW_MAX_OPEN,
 )
 
+try:
+    # Importing here (rather than only inside _parse_packet) registers Ether/IP
+    # into scapy's conf.l2types at module-load time. AsyncSniffer's capture
+    # socket resolves its link-layer dissection class exactly once, when the
+    # socket opens — if that table isn't populated yet, every packet for the
+    # rest of the session silently falls back to undissected Raw, and
+    # `IP not in pkt` below is then always True. Importing early (before any
+    # sniffer is constructed) avoids that.
+    from scapy.layers.inet import IP, TCP, UDP
+except ImportError:
+    IP = TCP = UDP = None  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 # Standard TCP header flags byte bitmasks
@@ -101,12 +113,7 @@ class _PacketInfo:
 def _parse_packet(pkt) -> Optional[_PacketInfo]:
     """Extract flow-accounting fields from a raw Scapy packet. Returns None
     for non-IP traffic (ARP, etc.) — those carry no flow-feature signal."""
-    try:
-        from scapy.layers.inet import IP, TCP, UDP
-    except ImportError:
-        return None
-
-    if IP not in pkt:
+    if IP is None or IP not in pkt:
         return None
     ip = pkt[IP]
 
