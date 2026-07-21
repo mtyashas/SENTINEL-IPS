@@ -214,6 +214,7 @@ class _FlowState:
 
         self.closed_by: Optional[str] = None
         self._fin_seen = {"fwd": False, "bwd": False}
+        self._fin_close_pending = False
 
         self.ingest(pi)
 
@@ -281,7 +282,16 @@ class _FlowState:
         if pi.tcp_flags & _RST:
             self.closed_by = "rst"
         elif self._fin_seen["fwd"] and self._fin_seen["bwd"]:
-            self.closed_by = "fin"
+            # A standard TCP close is FIN -> ACK -> FIN -> ACK: the packet
+            # that sets the second fin_seen flag is *not* the last packet of
+            # the connection — the peer's ACK of that second FIN still
+            # follows it. Closing immediately here would pop the flow before
+            # that trailing ACK arrives, orphaning it into its own spurious
+            # one-packet "flow". Wait one more ingest() call before finalizing.
+            if self._fin_close_pending:
+                self.closed_by = "fin"
+            else:
+                self._fin_close_pending = True
 
     def _update_bulk(self, direction: str, pi: _PacketInfo) -> None:
         if pi.payload_len <= 0:
