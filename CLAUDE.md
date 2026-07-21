@@ -794,6 +794,9 @@ Pipeline([
 | ROC-AUC equals nan | Test set contains only one class | Use stratified sampling for all test splits |
 | CV memory error | 2M row median imputer exhausts RAM | Skip CV on full dataset or use 20% sample |
 | Inf values in 2018 data | Flow rate division by zero | Replace inf then clip to range -1e15 to 1e15 |
+| Scapy finds no interfaces / capture does nothing on Windows | Npcap driver not installed (system-level, not pip-installable) | Install Npcap from npcap.com with "WinPcap API-compatible Mode" checked; run as Administrator unless installed without the admin-only restriction |
+| FlowCollector bulk/subflow/active-idle columns approximate | CICFlowMeter's exact bulk/subflow heuristics are undocumented and hard to reproduce bit-exact | Best-effort reimplementation in core/flow_collector.py; none are top-15 SHAP features, so risk is low |
+| "Fwd Header Length.1" would zero-fill on live flows | Duplicate column from a repeated CSV header in the original 2017 dataset, preserved into training | core/flow_collector.py emits it as a copy of fwd_header_length instead of leaving it to _align_features's zero-fill |
 
 ---
 
@@ -868,6 +871,42 @@ Phase 13 : train.py + sentinel.py integration and testing
 10. Production quality only — no shortcuts, no placeholder code
 11. After completing each file confirm what was built and wait
 12. If memory error occurs reduce sample size not chunk size
+
+---
+
+## SESSION LEDGER PROTOCOL
+
+Full design: `docs/superpowers/specs/2026-07-21-session-ledger-design.md`.
+
+- **Session start** — before starting any work, ask the user once:
+  "Log this session to the ledger?" If declined, don't ask again this
+  conversation and don't write an entry even if a stop phrase is said later.
+- **During the session** — if opted in, silently track the session's goal,
+  concrete changes, decisions, and next steps as work happens. No visible
+  action needed beyond normal work.
+- **Session end** — on hearing a stop phrase ("stop session", "end session",
+  "wrap up", or an obvious equivalent), draft an entry using the template
+  below and prepend it to `docs/SESSION_LEDGER.md` (newest on top).
+  No stop phrase, no entry.
+
+```markdown
+## YYYY-MM-DD — <short session title>
+
+**Goal:** What we set out to do this session.
+
+**Changes:** What actually got built/changed/decided in concrete terms
+(files touched, features added, results produced).
+
+**Decisions:** Key choices made and the reasoning, especially anything
+non-obvious a teammate would need to know to not redo the debate.
+
+**Next steps:** What's queued up for the following session.
+
+---
+```
+
+All four fields always present — write "None" or a one-line "n/a" if a
+field genuinely doesn't apply rather than omitting the heading.
 
 ---
 

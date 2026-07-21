@@ -1,4 +1,4 @@
-﻿# SENTINEL IPS v2.0
+# SENTINEL IPS v2.0
 
 **AI-powered Intrusion Prevention System** — a 13-phase, 31-module pipeline for real-time network threat detection, built as a Major Project (Phase II) and submitted to **Samsung Solve for Tomorrow 2026** under the "AI Living for India" theme, positioned as a democratized cybersecurity solution for schools and MSMEs.
 
@@ -34,22 +34,28 @@ Python · XGBoost · scikit-learn · SHAP · Streamlit · Plotly · pandas · Nu
 
 ## Getting Started
 
-\\\ash
+Windows prerequisite for live capture (`sentinel.py live`): install
+[Npcap](https://npcap.com/) with "WinPcap API-compatible Mode" checked, and
+run from an elevated (Administrator) shell unless Npcap was installed
+without the admin-only access restriction. See `lab/README.md` for the
+full live-traffic validation lab setup.
+
+```bash
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
 python sentinel.py health
-\\\
+```
 
 Run the dashboard:
-\\\ash
+```bash
 streamlit run dashboard/app.py
-\\\
+```
 
 Run the demo:
-\\\ash
+```bash
 python demo.py
-\\\
+```
 
 ## Reports & Explainability
 

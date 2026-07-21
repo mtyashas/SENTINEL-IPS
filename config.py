@@ -352,6 +352,18 @@ SHAP_BACKGROUND_SAMPLES    = 500       # KernelExplainer background set size
 SHAP_EXPLAIN_SAMPLES       = 200       # samples to explain per run
 
 # ---------------------------------------------------------------------------
+# M. LIVE CAPTURE & FLOW ASSEMBLY  (core/flow_collector.py, sentinel.py live)
+# ---------------------------------------------------------------------------
+
+LIVE_INTERFACE_DEFAULT = "eth0"              # overridden by --interface
+LIVE_BPF_FILTER        = "tcp or udp"        # overridden by --bpf-filter
+FLOW_ACTIVE_TIMEOUT_S  = 5.0                 # gap (s) that starts a new active period
+FLOW_IDLE_TIMEOUT_S    = 120.0               # gap (s) after which an open flow is force-closed
+FLOW_GC_INTERVAL_S     = 2.0                 # how often live mode drains completed/idle flows
+FLOW_MAX_OPEN          = 50_000              # safety cap on concurrently open flows
+LAB_HOST_ONLY_SUBNET   = "192.168.56.0/24"   # reference only — see lab/README.md
+
+# ---------------------------------------------------------------------------
 # SIGNATURE PATTERNS  (Layer 2 detection)
 # ---------------------------------------------------------------------------
 

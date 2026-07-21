@@ -70,6 +70,9 @@ from config import (
     CONFIDENCE_THRESHOLD,
     DATA_2017,
     ENGINEERED_FEATURES,
+    FLOW_GC_INTERVAL_S,
+    LIVE_BPF_FILTER,
+    LIVE_INTERFACE_DEFAULT,
     MITRE_ATTACK_MAP,
     MODEL_DIR,
     MULTICLASS_LABEL_COL,
@@ -120,6 +123,9 @@ from dashboard.live_monitor import LiveMonitor
 # Preprocessing (for simulate mode)
 from core.features import NetworkFeatureEngineer, get_feature_matrix
 from core.preprocessing import load_full_dataset
+
+# Flow assembly (for live mode)
+from core.flow_collector import FlowCollector
 
 
 # ---------------------------------------------------------------------------
@@ -702,7 +708,19 @@ def _run_simulate(args) -> None:
 # ---------------------------------------------------------------------------
 
 def _run_live(args) -> None:
-    """Real-time capture via Scapy."""
+    """
+    Real-time capture via Scapy.
+
+    Raw packets are assembled into CIC-IDS-schema flow records by
+    FlowCollector, engineered (bytes_per_pkt) by NetworkFeatureEngineer,
+    then run through the existing SentinelIPS.process_chunk() pipeline —
+    the same detection path simulate mode uses, just fed by live traffic
+    instead of replayed CSV rows.
+
+    Active countermeasures stay off unless --enforce-blocks is passed
+    (default False): detections are still logged/alerted/blacklisted in
+    threat_intel/ip_blacklist.txt, but no OS firewall rule is ever applied.
+    """
 
     model_path = args.model or str(MODEL_DIR / "benchmarkids_binary.pkl")
     ips        = SentinelIPS(
@@ -710,33 +728,66 @@ def _run_live(args) -> None:
         enforce_blocks=args.enforce_blocks,
     )
 
-    interface = args.interface or "eth0"
-    logger.info("Live capture mode on interface: %s", interface)
+    interface  = args.interface or LIVE_INTERFACE_DEFAULT
+    bpf_filter = args.bpf_filter or LIVE_BPF_FILTER
+    logger.info("Live capture mode on interface: %s (filter=%r)", interface, bpf_filter)
     logger.warning(
-        "Live capture requires elevated privileges (root/WinPcap) "
+        "Live capture requires elevated privileges (root/Npcap) "
         "and a fitted anomaly detector. Starting Scapy capture..."
     )
 
+    collector = FlowCollector()
+    eng       = NetworkFeatureEngineer(keep_raw=True)
+
     try:
-        ips._pkt_logger.start_live_capture(interface)
-        logger.info("Packet logger capturing on %s", interface)
+        from scapy.sendrecv import AsyncSniffer
+        flow_sniffer = AsyncSniffer(
+            iface=interface, filter=bpf_filter,
+            prn=collector.ingest_packet, store=False,
+        )
+        flow_sniffer.start()
+        logger.info("Flow-assembling sniffer started on %s", interface)
+    except Exception as exc:
+        logger.error("Failed to start flow-assembling sniffer: %s", exc)
+        ips.shutdown()
+        return
+
+    try:
+        ips._pkt_logger.start_live_capture(interface, bpf_filter=bpf_filter)
+        logger.info("Forensic packet logger capturing on %s", interface)
     except Exception as exc:
         logger.warning("Packet logger capture failed: %s", exc)
 
-    # In live mode we run indefinitely, processing synthetic flow batches
-    # (real flow extraction from pcap would be handled by FlowCollector)
     logger.info("Live mode active — press Ctrl+C to stop")
     try:
         while True:
-            time.sleep(5)
-            snap = ips.monitor.snapshot()
+            time.sleep(FLOW_GC_INTERVAL_S)
+
+            closed    = collector.pop_completed_flows()
+            timed_out = collector.sweep_idle_flows()
+            frames    = [f for f in (closed, timed_out) if not f.empty]
+            if frames:
+                flow_df = pd.concat(frames, ignore_index=True)
+                flow_df = eng.transform(flow_df)
+                ips.process_chunk(flow_df)
+                del flow_df
+                gc.collect()
+
+            snap   = ips.monitor.snapshot()
+            cstats = collector.get_stats()
             logger.info(
-                "Live: attacks=%d  fps=%.0f  unique_ips=%d",
+                "Live: attacks=%d  fps=%.0f  open_flows=%d  unique_ips=%d",
                 snap["total_attacks"], snap["current_fps"],
-                ips.attack_map.total_unique_ips(),
+                cstats["open_flows"], ips.attack_map.total_unique_ips(),
             )
     except KeyboardInterrupt:
-        logger.info("Keyboard interrupt — shutting down...")
+        logger.info("Keyboard interrupt — flushing remaining flows...")
+        final_df = collector.flush_all()
+        if not final_df.empty:
+            ips.process_chunk(eng.transform(final_df))
+            del final_df
+            gc.collect()
+        flow_sniffer.stop()
         ips.summary()
         ips.shutdown()
 
@@ -746,10 +797,10 @@ def _run_live(args) -> None:
 # ---------------------------------------------------------------------------
 
 def _run_health(args) -> None:
-    """Import-only health check — verifies all 31 modules load cleanly."""
+    """Import-only health check — verifies all 32 modules load cleanly."""
     _modules = [
         "config",
-        "core.preprocessing", "core.features", "core.model",
+        "core.preprocessing", "core.features", "core.model", "core.flow_collector",
         "detection.layer1_ml", "detection.layer2_signatures", "detection.layer3_anomaly",
         "intelligence.threat_feeds", "intelligence.ip_reputation",
         "intelligence.domain_reputation", "intelligence.honeypot",
@@ -779,7 +830,7 @@ def _run_health(args) -> None:
         print(f"FAIL: {m}")
         print(f"      {e}")
     if not fail:
-        print("\nAll 31 modules operational.")
+        print("\nAll 32 modules operational.")
         print("Run: python train.py   to train models")
         print("Run: python sentinel.py simulate   to process data")
         print("Run: streamlit run dashboard/app.py   to open dashboard")
@@ -809,15 +860,17 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # --- live ---
     live = sub.add_parser("live", help="Real-time packet capture")
-    live.add_argument("--interface",     default="eth0",
-                      help="Network interface for capture")
+    live.add_argument("--interface",     default=None,
+                      help="Network interface for capture (default: config.LIVE_INTERFACE_DEFAULT)")
+    live.add_argument("--bpf-filter",    default=None,
+                      help="Berkeley Packet Filter expression (default: config.LIVE_BPF_FILTER)")
     live.add_argument("--model",         default=None,
                       help="Path to trained BenchmarkIDS pkl")
     live.add_argument("--enforce-blocks",action="store_true",
                       help="Enable OS-level IP blocking (requires root)")
 
     # --- health ---
-    sub.add_parser("health", help="Verify all 31 modules load cleanly")
+    sub.add_parser("health", help="Verify all 32 modules load cleanly")
 
     return p
 
