@@ -230,7 +230,12 @@ class MLDetectionLayer:
                         attack_classes.append("BENIGN")
                     else:
                         idx = int(mc) if int(mc) < len(ATTACK_CLASSES) else 0
-                        attack_classes.append(ATTACK_CLASSES[idx])
+                        # Binary already flagged this row as an attack; if the
+                        # multiclass model's top class disagrees and says
+                        # BENIGN (idx 0), trust the binary decision and fall
+                        # back to a generic label rather than emitting the
+                        # self-contradictory "flagged attack, class=BENIGN".
+                        attack_classes.append(ATTACK_CLASSES[idx] if idx != 0 else "ATTACK")
                 result["attack_class"] = attack_classes
             except Exception as exc:
                 logger.warning("Multiclass prediction failed: %s", exc)

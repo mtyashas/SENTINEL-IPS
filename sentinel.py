@@ -330,6 +330,15 @@ class SentinelIPS:
             # Response
             self._run_response(event)
 
+            logger.info(
+                "DETECTION src=%s dst_port=%d attack=%s confidence=%.2f "
+                "severity=%s mitre=%s/%s action=%s",
+                event["src_ip"], event["dst_port"], event["attack_type"],
+                event["confidence"], event["severity"],
+                event.get("mitre_technique", "T0000"),
+                event.get("mitre_tactic", "Unknown"), event["action"],
+            )
+
             # Forensics
             self._pkt_logger.log_event(event)
             self._events_buffer.append(event)
