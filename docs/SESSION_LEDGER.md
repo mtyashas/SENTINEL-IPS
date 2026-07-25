@@ -10,6 +10,71 @@ for the full protocol.
 
 ---
 
+## 2026-07-22 — Benign VM stood up; lab M1-M3 complete; two live-capture bugs fixed
+
+**Goal:** Get the benign-traffic VM working and finish M1, then push through
+M2 and M3 of the live-traffic validation lab (`lab/README.md`).
+
+**Changes:**
+- Fixed the Ubuntu benign VM's "No bootable medium found" by mounting the
+  already-downloaded `ubuntu-26.04-desktop-amd64.iso` to its IDE optical
+  drive (it had a blank disk and no ISO attached).
+- Fixed a kernel panic in the installer (`vmwgfx` driver crash — "running on
+  an unsupported hypervisor") by switching the VM's graphics controller from
+  `vmsvga` to `vboxsvga`.
+- Fixed host-reported lag in the Ubuntu VM by raising its VRAM 16MB→128MB,
+  and right-sized Kali (10,874MB RAM/16 vCPUs → 4096MB/4 vCPUs, since that
+  was ~68% of the 16GB host's total memory).
+- Completed the Ubuntu install, set static IP `192.168.56.20/24` on `enp0s8`
+  ("Wired connection 1") via `nmcli`, matching Kali's `192.168.56.10` setup.
+- **M1 done** — host↔Kali and host↔Ubuntu ping clean both directions.
+- **M2 done** — but first found and fixed a critical bug: Scapy only
+  populates its datalink-dissection table (`conf.l2types`) when
+  `scapy.layers.inet`/`l2` is imported, and a capture socket resolves its
+  dissection class exactly once, at open time. `core/flow_collector.py` and
+  `forensics/packet_logger.py` both imported only the narrow
+  `scapy.sendrecv.AsyncSniffer`, so every live-captured packet silently fell
+  back to undissected `Raw` — `FlowCollector` would have built zero flows,
+  forever, despite pcap capture working fine. Fixed by importing
+  `scapy.layers.inet` at module load time in both files; verified against
+  real traffic on the lab network.
+- **M3 done** — via `lab/target_service.py` + `curl` from the Ubuntu VM. Hit
+  a second bug along the way: `_FlowState` closed a flow the instant both
+  directions had sent a FIN, but a standard TCP close is
+  FIN→ACK→FIN→**ACK** — that trailing ACK arrived to find the flow already
+  popped, spawning a phantom one-packet flow per clean connection close.
+  Fixed by delaying finalization by one packet. Verified: one curl request
+  now produces exactly 1 flow row (`destination_port=80`, `syn=2`, `fin=2`,
+  7 fwd / 5 bwd packets) instead of 2.
+- 4 commits made this session: the two bugfixes above, on top of last
+  session's live-capture-feature and generated-artifacts commits.
+
+**Decisions:**
+- `vboxsvga` is the working graphics controller for this Ubuntu Desktop +
+  VirtualBox combination — `vmsvga` reliably kernel-panics on boot here.
+- Both Scapy bugs were fixed by importing the registration module at load
+  time rather than patching each call site, so the fix covers any future
+  code in this project that opens a Scapy capture socket.
+- FIN-close finalization is delayed by exactly one packet rather than
+  building a full TCP state machine — matches the real FIN→ACK→FIN→ACK
+  sequence, and the existing idle-timeout sweep already covers the case
+  where the trailing packet never arrives.
+
+**Next steps:**
+- **M4** — single attack type detection: `sentinel.py live --interface
+  "Ethernet 2" --model models\benchmarkids_binary.pkl` on the host, `nmap
+  -sS 192.168.56.1` from Kali while Ubuntu keeps generating benign
+  curl/ping traffic; confirm Kali's flows classify as `PortScan`/`T1046`
+  while Ubuntu's stay benign.
+- **M5** — mixed concurrent benign + attack, end-to-end (5-10 min run,
+  multiple attack types from Kali: `hping3` flood, `hydra` brute force,
+  curl SQLi-shaped payload).
+- Install `nmap hydra hping3 slowhttptest curl` on Kali before M4/M5, per
+  `lab/README.md`, if not already present.
+- Working tree is clean — nothing left uncommitted.
+
+---
+
 ## 2026-07-22 — Session ledger bootstrap + live-capture lab M1 (Kali side)
 
 **Goal:** Pick up the in-progress live-traffic validation lab from the
