@@ -10,6 +10,114 @@ for the full protocol.
 
 ---
 
+## 2026-07-28 — M5 gaps fixed and verified; Layer 2 wired in for the first time ever
+
+**Goal:** Fix the two M5 gaps queued from 2026-07-27 (unreachable
+RESPONSE_MATRIX blocks, anomaly-baseline contamination), then confirm the
+fixes against real traffic rather than isolated unit checks.
+
+**Changes:**
+- Fixed `_run_response()` in `sentinel.py`: it computed `actions` from
+  `RESPONSE_MATRIX` but only ever used it for a cosmetic log string — the
+  actual block decision checked severity alone, so `BruteForce`'s
+  documented `ip_block_1h` and `PortScan`'s `ip_block_24h` were silently
+  unreachable. Fixed additively (existing HIGH/CRITICAL behaviour
+  untouched).
+- Fixed the anomaly detector fitting on whatever was in the first chunk to
+  cross 100 rows regardless of attack/benign mix (could baseline on
+  attack-heavy data during a flood). Now accumulates only Layer-1-benign
+  rows across calls until 100 have genuinely been seen.
+- Replayed the real M5 capture (79,679 flows) through both fixes: Kali
+  correctly blacklisted via BruteForce, Ubuntu clean — but the host's own
+  IP (`192.168.56.1`) was misclassified as BruteForce 585 times and would
+  have self-blocked. Added a guard in `IPBlacklister.block()` refusing to
+  block any of the machine's own interface IPs (enumerated via Scapy, not
+  just hostname resolution — the affected IP was a secondary adapter
+  hostname lookup wouldn't reliably catch).
+- User asked why the M5 run never showed DDoS or SQLi. Answer led to a
+  much bigger finding: `self._sig = SignatureDetector()` (Layer 2) was
+  instantiated in `SentinelIPS.__init__` but **never called anywhere** —
+  the entire signature-detection layer had been completely disconnected
+  from the live pipeline this whole project, for every prior session, not
+  just tonight. Wired it in for the first time: `core/flow_collector.py`
+  now captures a bounded payload sample per flow (first data-carrying
+  packet, capped 2048 bytes); `sentinel.py` added `_run_signatures()`,
+  called between Layer 1 and Layer 3, promoting `pred_binary` and flooring
+  confidence at 0.90 on a signature hit; `_build_event()` now prefers a
+  signature-confirmed `attack_type` over the ML-derived one.
+- Actually exercising Layer 2 for the first time surfaced two more real
+  bugs: (1) `COMMAND_INJECTION_PATTERNS`' first pattern was a bare
+  `[;&|`]`, matching the `&` in every ordinary URL-encoded form POST —
+  relabelled hundreds of hydra's legitimate brute-force attempts as
+  `CommandInject` (HIGH severity). Tightened to `[;|`]|&&` (real shell
+  chaining, not form encoding). (2) `FlowCollector`'s 5-tuple flow key had
+  no defense against port reuse across a long idle gap: an `hping3` flood
+  packet left a flow open forever (flood traffic gets no RST/FIN
+  response), and 215 seconds later curl's real SQLi request reused the
+  exact same ephemeral port — silently merging into the stale flow and
+  losing the request to `payload_sample`'s first-write-wins rule. This
+  wasn't narrow: fixing it changed total flows in the M5 replay from
+  79,679 to 116,904, meaning it had been corrupting flow statistics
+  throughout the whole capture, not just the one visible case. Fixed: a
+  fresh SYN on an already-tracked key force-closes the stale flow (gated
+  on >=3s idle so a legitimate rapid retransmission isn't mistaken for a
+  new connection).
+- Final re-verification against the real M5 capture (116,904 flows,
+  14,873 attacks): `BruteForce` 8,308, `DoS` 755 (correctly never `DDoS`
+  — single-source flood), `SQLInjection` 2 (via Layer 2, matching the 2
+  duplicate packets found in the raw capture), `ATTACK`/`Unknown` 5,808
+  generic (binary/multiclass disagreement + anomaly-only catches — a
+  known, explained limitation, not a new bug). Kali blacklisted, Ubuntu
+  clean, host self-block guard held.
+- Discovered (not yet fixed): the production model has been silently
+  capped at 37 of 79 available raw features since 2026-07-20, because
+  `MLDetectionLayer._align_features()` builds every retrain's training
+  data from a cached 37-column list, and every adaptive retrain since
+  (including tonight's) re-derives from that same stale cache — a
+  self-perpetuating bottleneck, never a deliberate choice.
+- 8 commits made tonight (adaptive retraining infra, profiler debounce,
+  research paper doc + real M4 curves, the two M5 response/anomaly fixes,
+  the self-block guard, Layer 2 wiring + the 2 bugs it surfaced, plus
+  threat-intel artifact commits).
+
+**Decisions:**
+- Chose to replay the real M5 pcap through the fixed pipeline end-to-end
+  rather than trust isolated unit checks alone — this is exactly what
+  surfaced the self-block gap and, later, the SYN-port-reuse bug; neither
+  would have been caught by a narrower test.
+- When investigating why SQLi wasn't detected, kept digging through three
+  layers of root cause (wiring gap → pattern false-positive → flow-merge
+  bug) instead of stopping at the first plausible explanation — the SYN-
+  port-reuse bug turned out to be the one with the largest actual impact
+  (37k+ flows affected), and would have stayed hidden if the investigation
+  had stopped earlier.
+- Deferred the 37-vs-79-feature fix to next session rather than starting
+  a fresh retraining cycle at 3am — real, well-motivated next step, but a
+  genuine time investment (fix the cache bottleneck, retrain fresh,
+  re-verify against tonight's captures), not a quick patch.
+
+**Next steps:**
+- Fix the feature-cache bottleneck and retrain on the full 79-column
+  feature set; re-verify against tonight's M4/M5 captures to see whether
+  it reduces the binary/multiclass disagreement behind the generic
+  `ATTACK` label.
+- Run a broader attack-type spread next session (`PortScan` via `nmap -sS`
+  distinct from the flood, `XSS`, `CommandInject`, `PathTraversal`
+  alongside `SQLInjection`) — and log the exact start/stop time of each
+  tool while running it, so flows can be ground-truth-labelled by
+  timestamp window instead of flow-shape heuristics, which is what
+  actually blocked confident `DoS` labelling this session (bare-SYN-flood
+  and legitimate closed-port-probe flows are provably identical at the
+  per-flow feature level; timestamp windows sidestep that ambiguity
+  entirely instead of trying to resolve it in feature space).
+- The cross-flow rate signal gap (connections/sec from a source) remains
+  fully unaddressed — no amount of relabelling or using more of the
+  existing 79 CICFlowMeter-style columns can substitute for it; it needs
+  a genuinely new stateful feature in `FlowCollector`.
+- Working tree is clean — nothing left uncommitted.
+
+---
+
 ## 2026-07-27 — Adaptive retraining wired up, M4 resolved and re-verified at scale, M5 run
 
 **Goal:** Pick up from 2026-07-25's M4 domain-shift blocker — get adaptive
