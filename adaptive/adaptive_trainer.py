@@ -96,16 +96,20 @@ class AdaptiveTrainer:
         collector:        MistakeCollector,
         model_dir:        Path = MODEL_DIR,
         train_cache_path: Optional[Path] = None,
+        mode:             str = "binary",
+        production_model_name: Optional[str] = None,
     ) -> None:
         self._collector        = collector
         self._model_dir        = model_dir
-        self._prod_path        = model_dir / _PRODUCTION_MODEL_NAME
+        self.mode               = mode
+        self._prod_name         = production_model_name or _PRODUCTION_MODEL_NAME
+        self._prod_path        = model_dir / self._prod_name
         self._train_cache_path = train_cache_path or (model_dir / "train_cache.parquet")
         self._retrain_count    = 0
 
         logger.info(
-            "AdaptiveTrainer ready — prod_model=%s, train_cache=%s",
-            self._prod_path, self._train_cache_path,
+            "AdaptiveTrainer ready — mode=%s prod_model=%s, train_cache=%s",
+            self.mode, self._prod_path, self._train_cache_path,
         )
 
     # ------------------------------------------------------------------
@@ -129,14 +133,16 @@ class AdaptiveTrainer:
         try:
             df = pd.read_parquet(self._train_cache_path)
             if len(df) > n:
-                # Stratified sample to preserve class ratio
-                pos = df[df["__label__"] == 1]
-                neg = df[df["__label__"] == 0]
-                n_pos = min(len(pos), n // 2)
-                n_neg = min(len(neg), n - n_pos)
+                # Stratified sample to preserve class ratio, generalized to
+                # any number of classes (binary is just the n=2 case).
+                classes = df["__label__"].unique()
+                n_per_class = max(n // len(classes), 1)
                 df = pd.concat([
-                    pos.sample(n=n_pos, random_state=42),
-                    neg.sample(n=n_neg, random_state=42),
+                    df[df["__label__"] == c].sample(
+                        n=min((df["__label__"] == c).sum(), n_per_class),
+                        random_state=42,
+                    )
+                    for c in classes
                 ], ignore_index=True)
 
             y = df["__label__"].astype(int)
@@ -147,6 +153,48 @@ class AdaptiveTrainer:
             logger.warning("Train cache load failed: %s", exc)
             return pd.DataFrame(), pd.Series(dtype=int)
 
+    @staticmethod
+    def _balanced_mistake_weights(mistake_types: pd.Series) -> np.ndarray:
+        """
+        Per-row sample weight for the mistake buffer, balanced by mistake
+        type (FP vs FN) rather than a flat _MISTAKE_WEIGHT for every row.
+
+        A flat weight lets whichever mistake type is numerically dominant
+        (e.g. thousands of missed-attack FNs from one noisy capture) drown
+        out a handful of FP mistakes in the loss, even though the FPs are
+        just as real and often rarer precisely because they're the harder
+        case. Weight is _MISTAKE_WEIGHT scaled by inverse frequency within
+        the mistake buffer, mirroring standard balanced class weighting but
+        applied only within the mistakes (original-data rows keep weight 1.0).
+        """
+        if mistake_types.empty:
+            return np.zeros(0)
+        counts = mistake_types.value_counts()
+        n_total = len(mistake_types)
+        n_types = len(counts)
+        balanced = mistake_types.map(lambda t: n_total / (n_types * counts[t]))
+        return (_MISTAKE_WEIGHT * balanced).to_numpy()
+
+    @staticmethod
+    def _align_to_model(X: pd.DataFrame, model: BenchmarkIDS) -> pd.DataFrame:
+        """
+        Restrict/reindex X to exactly the columns `model`'s pipeline was fit
+        on (zero-filling anything missing). Old and new models in a retrain
+        cycle are frequently fit on different column sets than whatever the
+        caller's held-out X_test happens to contain (e.g. it was built from
+        raw feature engineering rather than the model's own trained schema),
+        so evaluation must align per-model rather than assuming X_test
+        already matches.
+        """
+        try:
+            expected = list(model._pipeline.named_steps["imputer"].feature_names_in_)
+        except Exception:
+            return X
+        aligned = pd.DataFrame(index=X.index)
+        for col in expected:
+            aligned[col] = X[col] if col in X.columns else 0.0
+        return aligned
+
     def _eval_model(
         self,
         model:  BenchmarkIDS,
@@ -155,9 +203,11 @@ class AdaptiveTrainer:
     ) -> tuple[float, float]:
         """Return (recall, f1) for a model on the given test set."""
         try:
-            preds = model.predict(X_test)
-            recall = float(recall_score(y_test, preds, zero_division=0))
-            f1     = float(f1_score(y_test, preds, zero_division=0))
+            X_test = self._align_to_model(X_test, model)
+            preds  = model.predict(X_test)
+            average = "macro" if self.mode == "multiclass" else "binary"
+            recall = float(recall_score(y_test, preds, average=average, zero_division=0))
+            f1     = float(f1_score(y_test, preds, average=average, zero_division=0))
             return recall, f1
         except Exception as exc:
             logger.error("Model evaluation failed: %s", exc)
@@ -223,6 +273,7 @@ class AdaptiveTrainer:
 
         # --- Step 1: Get mistake samples ---
         X_mistakes, y_mistakes = self._collector.get_xy()
+        mistake_weights = self._balanced_mistake_weights(self._collector.get_types())
         if X_mistakes.empty:
             logger.warning("No mistake samples available — skipping retrain")
             return RetrainResult(
@@ -240,24 +291,29 @@ class AdaptiveTrainer:
 
         # --- Step 3: Combine with sample weights ---
         if not X_orig.empty:
-            # Align columns: use intersection so shapes always match
-            common_cols = list(set(X_mistakes.columns) & set(X_orig.columns))
+            # Align columns: intersect but preserve X_mistakes's order (the
+            # production model's original training-time column order) — a
+            # plain set intersection has no guaranteed order and produces a
+            # model whose fit-time column order silently drifts from what
+            # MLDetectionLayer's cached feature-column list expects.
+            orig_cols_set = set(X_orig.columns)
+            common_cols = [c for c in X_mistakes.columns if c in orig_cols_set]
             if not common_cols:
                 logger.warning("No overlapping columns between mistakes and cache — using mistakes only")
                 X_train, y_train = X_mistakes, y_mistakes
-                weights = np.ones(len(X_train)) * _MISTAKE_WEIGHT
+                weights = mistake_weights
             else:
                 X_mistakes_aligned = X_mistakes[common_cols]
                 X_orig_aligned     = X_orig[common_cols]
                 X_train = pd.concat([X_mistakes_aligned, X_orig_aligned], ignore_index=True)
                 y_train = pd.concat([y_mistakes, y_orig],                 ignore_index=True)
                 weights = np.concatenate([
-                    np.full(len(X_mistakes), _MISTAKE_WEIGHT),
+                    mistake_weights,
                     np.ones(len(X_orig)),
                 ])
         else:
             X_train, y_train = X_mistakes, y_mistakes
-            weights = np.ones(len(X_train)) * _MISTAKE_WEIGHT
+            weights = mistake_weights
 
         total_rows = len(X_train)
         logger.info(
@@ -274,13 +330,20 @@ class AdaptiveTrainer:
 
         # --- Step 5: Train new model ---
         try:
+            # scale_pos_weight=1.0 (not the global SCALE_POS_WEIGHT): XGBoost
+            # multiplies scale_pos_weight onto every positive-class row's
+            # weight *on top of* sample_weight. The global constant exists to
+            # correct the original dataset's class imbalance; stacking it
+            # here would blanket-favour the attack class across all 22k
+            # training rows and drown out the deliberate per-mistake
+            # balancing in `weights`, which already targets exactly the rows
+            # that need correcting.
             new_model = BenchmarkIDS(
-                mode="binary",
+                mode=self.mode,
                 k_features=min(K_BEST_FEATURES, X_train.shape[1]),
-                scale_pos_weight=SCALE_POS_WEIGHT,
+                scale_pos_weight=1.0,
             )
-            # Pass sample_weight via fit params
-            new_model.fit(X_train, y_train)
+            new_model.fit(X_train, y_train, sample_weight=weights)
         except Exception as exc:
             logger.error("Retraining failed: %s", exc)
             return RetrainResult(
@@ -360,13 +423,14 @@ class AdaptiveTrainer:
             df = X.copy()
             df["__label__"] = y.values
             if len(df) > max_rows:
-                pos = df[df["__label__"] == 1]
-                neg = df[df["__label__"] == 0]
-                n_pos = min(len(pos), max_rows // 2)
-                n_neg = min(len(neg), max_rows - n_pos)
+                classes = df["__label__"].unique()
+                n_per_class = max(max_rows // len(classes), 1)
                 df = pd.concat([
-                    pos.sample(n=n_pos, random_state=42),
-                    neg.sample(n=n_neg, random_state=42),
+                    df[df["__label__"] == c].sample(
+                        n=min((df["__label__"] == c).sum(), n_per_class),
+                        random_state=42,
+                    )
+                    for c in classes
                 ], ignore_index=True)
             df.to_parquet(self._train_cache_path, index=False)
             logger.info(

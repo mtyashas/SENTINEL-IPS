@@ -205,6 +205,21 @@ class MistakeCollector:
                 return pd.DataFrame()
             return pd.DataFrame(self._rows).copy()
 
+    def get_types(self) -> pd.Series:
+        """
+        Return the mistake_type ("FP"/"FN") for each row, in the same row
+        order as get_xy()'s output — lets a caller weight FP vs FN mistakes
+        differently (e.g. balanced by how rare each type is in the buffer),
+        since a flat per-mistake weight lets whichever type is numerically
+        dominant drown out the other in training.
+
+        Outputs: pd.Series of "FP"/"FN"; empty Series if buffer is empty
+        """
+        df = self.get_dataframe()
+        if df.empty:
+            return pd.Series(dtype=str)
+        return df[_TYPE_COL].reset_index(drop=True)
+
     def get_xy(self) -> tuple[pd.DataFrame, pd.Series]:
         """
         Return (X, y) split ready for model training.

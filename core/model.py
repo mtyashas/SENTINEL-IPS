@@ -158,7 +158,12 @@ class BenchmarkIDS(BaseEstimator, ClassifierMixin):
 
     # ------------------------------------------------------------------
 
-    def fit(self, X: pd.DataFrame, y: pd.Series) -> "BenchmarkIDS":
+    def fit(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        sample_weight: Optional[np.ndarray] = None,
+    ) -> "BenchmarkIDS":
         if not isinstance(X, pd.DataFrame):
             raise TypeError(
                 "BenchmarkIDS.fit() requires a pd.DataFrame — "
@@ -188,7 +193,10 @@ class BenchmarkIDS(BaseEstimator, ClassifierMixin):
             "Fitting %s [%s] on %d samples × %d features",
             self.__class__.__name__, self.mode, X.shape[0], X.shape[1],
         )
-        self._pipeline.fit(X, y_fit)
+        if sample_weight is not None:
+            self._pipeline.fit(X, y_fit, clf__sample_weight=sample_weight)
+        else:
+            self._pipeline.fit(X, y_fit)
         self.n_features_in_ = X.shape[1]
         logger.info("%s fit complete", self.__class__.__name__)
         return self
