@@ -91,11 +91,18 @@ class EvaluationReporter:
         self,
         result: EvaluationResult,
         title:  str = "ROC Curve",
+        zoom:   bool = False,
     ) -> Optional[Path]:
         """
         Plot ROC curve with AUC annotation.
 
-        Inputs:  result -- EvaluationResult with fpr_curve/tpr_curve populated
+        Inputs:
+            result -- EvaluationResult with fpr_curve/tpr_curve populated
+            zoom   -- if True, fit axis limits to where the curve actually
+                      varies (with padding) instead of the fixed full [0,1]
+                      range. A near-perfect classifier's curve hugs the
+                      top-left corner in the full view; zoom makes its shape
+                      visible. Default False preserves prior plot output.
         Outputs: Path to saved PNG, or None
         """
         plt = self._matplotlib()
@@ -120,8 +127,27 @@ class EvaluationReporter:
         ax.set_title(f"{title}\n{result.experiment}", fontsize=13)
         ax.legend(loc="lower right", fontsize=11)
         ax.grid(alpha=0.3)
-        ax.set_xlim([0.0, 1.0])
-        ax.set_ylim([0.0, 1.01])
+        if zoom:
+            # roc_curve() sweeps every threshold down to the lowest score, so
+            # fpr spans close to the full [0,1] range even for a near-perfect
+            # classifier -- just at unrealistic operating points. Zoom to the
+            # "elbow" instead: the region up to where tpr first approaches
+            # its maximum, which is where the curve's shape actually lives.
+            # A good classifier's ROC curve rises near-vertically at fpr=0
+            # (tpr climbing from 0 to its operating value while fpr stays 0)
+            # before flattening out -- that vertical run is real signal, not
+            # noise to crop, so only the x-axis (fpr) is zoomed. Full [0,1]
+            # unzoomed makes the whole curve invisible against the corner
+            # for a near-perfect classifier; zooming fpr to the "elbow"
+            # where tpr first approaches its max reveals its actual shape.
+            tpr_max = float(tpr.max())
+            elbow = np.argmax(tpr >= tpr_max - 0.01)
+            x_hi = min(max(float(fpr[elbow]) * 4.0, 0.03), 1.0)
+            ax.set_xlim([0.0, x_hi])
+            ax.set_ylim([0.0, 1.01])
+        else:
+            ax.set_xlim([0.0, 1.0])
+            ax.set_ylim([0.0, 1.01])
 
         return self._save_fig(plt, f"roc_{result.experiment}")
 
@@ -133,11 +159,18 @@ class EvaluationReporter:
         self,
         result: EvaluationResult,
         title:  str = "Precision-Recall Curve",
+        zoom:   bool = False,
     ) -> Optional[Path]:
         """
         Plot Precision-Recall curve.
 
-        Inputs:  result -- EvaluationResult with precision_curve/recall_curve populated
+        Inputs:
+            result -- EvaluationResult with precision_curve/recall_curve populated
+            zoom   -- if True, fit the y-axis to where precision actually
+                      varies (with padding) instead of the fixed [0,1.05]
+                      range. A high-AP curve's real variation (e.g. 0.94-1.0)
+                      is otherwise squeezed into a thin band at the top.
+                      Default False preserves prior plot output.
         Outputs: Path to saved PNG, or None
         """
         plt = self._matplotlib()
@@ -163,7 +196,12 @@ class EvaluationReporter:
         ax.legend(loc="upper right", fontsize=11)
         ax.grid(alpha=0.3)
         ax.set_xlim([0.0, 1.0])
-        ax.set_ylim([0.0, 1.05])
+        if zoom:
+            span = float(precision.max() - precision.min())
+            pad  = max(span * 0.15, 0.01)
+            ax.set_ylim([max(float(precision.min()) - pad, 0.0), min(float(precision.max()) + pad, 1.01)])
+        else:
+            ax.set_ylim([0.0, 1.05])
 
         return self._save_fig(plt, f"pr_curve_{result.experiment}")
 
