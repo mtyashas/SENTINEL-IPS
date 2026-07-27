@@ -137,6 +137,13 @@ _ZD_MINE_EVERY    = 2000   # run zero-day miner every N flows
 _RETRAIN_CHECK_S  = 3600   # check adaptive retrain every hour
 _LOG_INTERVAL     = 10_000 # progress log every N flows
 
+# RESPONSE_MATRIX action string -> block duration (seconds; 0 = permanent)
+_BLOCK_ACTION_DURATIONS = {
+    "ip_block_1h":  3600,
+    "ip_block_24h": 86400,
+    "ip_block":     3600,
+}
+
 
 # ---------------------------------------------------------------------------
 # SENTINEL engine
@@ -196,6 +203,7 @@ class SentinelIPS:
         # --- Layer 3: anomaly ---
         self._anomaly = AnomalyDetector(contamination=0.005)
         self._anomaly_fitted = False
+        self._anomaly_baseline_buffer: list = []
 
         # --- Intelligence ---
         self._ip_rep    = IPReputationScorer()
@@ -384,9 +392,24 @@ class SentinelIPS:
 
             X_num = chunk[feat_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
 
-            if not self._anomaly_fitted and len(X_num) >= 100:
-                self._anomaly.fit(X_num)
-                self._anomaly_fitted = True
+            if not self._anomaly_fitted:
+                # Fit only on flows Layer 1 already called benign, accumulated
+                # across calls until there's enough to fit on -- not on
+                # whatever's in the first single chunk that happens to cross
+                # 100 rows. A burst/flood produces large chunks fast, so
+                # fitting on raw chunk contents risked baselining the "normal"
+                # distribution on attack-heavy data, making genuinely benign
+                # traffic look anomalous by comparison afterward (M5 finding,
+                # docs/SESSION_LEDGER.md 2026-07-27).
+                benign_mask = chunk.get("pred_binary", pd.Series(0, index=chunk.index)) == 0
+                if benign_mask.any():
+                    self._anomaly_baseline_buffer.append(X_num[benign_mask])
+                buffered = sum(len(b) for b in self._anomaly_baseline_buffer)
+                if buffered >= 100:
+                    baseline = pd.concat(self._anomaly_baseline_buffer, ignore_index=True)
+                    self._anomaly.fit(baseline)
+                    self._anomaly_fitted = True
+                    self._anomaly_baseline_buffer = []
 
             if self._anomaly_fitted:
                 result_df = self._anomaly.predict(X_num)
@@ -541,13 +564,30 @@ class SentinelIPS:
             pass
 
         # IP blocking for HIGH/CRITICAL
+        blocked = False
         if severity in ("HIGH", "CRITICAL") and confidence >= 0.70:
             try:
                 duration = 3600 if severity == "HIGH" else 0   # 0 = permanent
                 self._blacklist.block(src_ip, duration_s=duration,
                                       reason=f"{attack} ({severity})")
+                blocked = True
             except Exception as exc:
                 logger.debug("Block failed: %s", exc)
+
+        # RESPONSE_MATRIX assigns some MEDIUM/LOW-severity attacks their own
+        # ip_block_* action independent of severity (e.g. BruteForce ->
+        # ip_block_1h, PortScan -> ip_block_24h) -- honour it even though
+        # severity alone didn't trigger a block above. Previously `actions`
+        # was computed but only used for the cosmetic event["action"] string,
+        # so these documented blocks were silently unreachable.
+        if not blocked and confidence >= 0.70:
+            block_action = next((a for a in actions if a in _BLOCK_ACTION_DURATIONS), None)
+            if block_action:
+                try:
+                    self._blacklist.block(src_ip, duration_s=_BLOCK_ACTION_DURATIONS[block_action],
+                                          reason=f"{attack} ({severity})")
+                except Exception as exc:
+                    logger.debug("Block failed: %s", exc)
 
         # Alert dispatch (non-blocking)
         try:
