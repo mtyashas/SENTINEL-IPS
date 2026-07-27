@@ -91,7 +91,28 @@ def check_anomaly_baseline_benign_only():
           "across two chunks, ignoring 400 attack-labelled rows seen in between")
 
 
+def check_never_self_block():
+    print("\n--- Check 3: IPBlacklister refuses to block this machine's own IP ---")
+    ips = SentinelIPS(model_path=str(MODEL_DIR / "benchmarkids_binary.pkl"))
+
+    import socket
+    self_ip = socket.gethostbyname(socket.gethostname())
+    event = {
+        "src_ip": self_ip, "dst_ip": "192.168.56.20", "src_port": 80, "dst_port": 4444,
+        "attack_type": "BruteForce", "confidence": 0.95, "severity": "MEDIUM",
+        "anomaly_score": 0.0, "timestamp": 0.0, "flow_bytes": 0.0,
+    }
+    ips._run_response(event)
+    assert not ips._blacklist.is_blocked(self_ip), (
+        f"a misclassified flow attributed to this machine's own IP ({self_ip}) "
+        "must never result in self-blocking, regardless of confidence/severity"
+    )
+    print(f"OK: {self_ip} (this machine) refused despite MEDIUM/0.95 confidence "
+          f"BruteForce event -- see 'Refused to block' warning above")
+
+
 if __name__ == "__main__":
     check_response_matrix_block()
     check_anomaly_baseline_benign_only()
+    check_never_self_block()
     print("\nAll M5 fix checks passed.")

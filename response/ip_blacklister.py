@@ -21,6 +21,7 @@ Usage:
 
 import logging
 import platform
+import socket
 import subprocess
 import threading
 import time
@@ -36,6 +37,44 @@ logger = logging.getLogger(__name__)
 _BLACKLIST_PATH  = THREAT_DIR / "ip_blacklist.txt"
 _OS              = platform.system()   # "Windows" | "Linux" | "Darwin"
 _RULE_PREFIX     = "SENTINEL_BLOCK"    # prefix for named firewall rules
+
+
+def _local_ips() -> set[str]:
+    """
+    This machine's own IP addresses across all interfaces, plus loopback.
+
+    A misclassified flow (e.g. host-originated background traffic on a
+    capture interface, observed in live-lab testing) must never result in
+    the protected server blocking itself -- checked dynamically rather than
+    hardcoded to any specific deployment's addresses.
+
+    Enumerates every network interface (not just the one behind hostname
+    resolution, which on a multi-homed box -- like this project's own lab
+    setup, where the capture-relevant IP is a secondary VirtualBox
+    host-only adapter -- may not include the interface actually being
+    protected) via Scapy, already a hard dependency for packet capture
+    elsewhere in this project. Falls back to hostname resolution only if
+    Scapy's interface list is unavailable.
+    """
+    ips = {"127.0.0.1", "::1"}
+    try:
+        from scapy.all import get_if_addr, get_if_list
+        for iface in get_if_list():
+            try:
+                addr = get_if_addr(iface)
+                if addr and addr != "0.0.0.0":
+                    ips.add(addr)
+            except Exception:
+                continue
+    except ImportError:
+        try:
+            hostname = socket.gethostname()
+            ips.add(socket.gethostbyname(hostname))
+            for info in socket.getaddrinfo(hostname, None):
+                ips.add(info[4][0])
+        except OSError:
+            pass
+    return ips
 
 
 @dataclass
@@ -251,6 +290,18 @@ class IPBlacklister:
         Outputs: BlacklistResult with success flag, method, and latency
         """
         t0 = time.monotonic()
+
+        if ip in _local_ips():
+            logger.warning(
+                "Refused to block %s -- matches this machine's own IP "
+                "(reason=%s); a misclassified flow must never self-block "
+                "the protected server", ip, reason,
+            )
+            return BlacklistResult(
+                ip=ip, success=False, method="refused_self",
+                reason=reason, expires_at=None,
+                latency_ms=round((time.monotonic() - t0) * 1000, 2),
+            )
 
         expires_at = None
         if duration_s > 0:
