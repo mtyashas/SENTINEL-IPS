@@ -128,6 +128,7 @@ class ThreatActorProfiler:
         self._profiles: dict[str, AttackerProfile] = {}
         self._lock      = threading.Lock()
         self._persist   = persist
+        self._last_persisted: dict[str, float] = {}
         logger.info("ThreatActorProfiler ready (persist=%s)", persist)
 
     # ------------------------------------------------------------------
@@ -166,7 +167,7 @@ class ThreatActorProfiler:
             self._update_fields(profile, event, ts, geo_country, geo_city, is_vpn)
             self._reclassify(profile)
 
-            if self._persist:
+            if self._persist and self._should_persist_now(src_ip):
                 self._append_to_disk(profile)
 
         logger.debug(
@@ -298,6 +299,19 @@ class ThreatActorProfiler:
     # Persistence
     # ------------------------------------------------------------------
 
+    def _should_persist_now(self, src_ip: str, min_interval_s: float = 2.0) -> bool:
+        # ponytail: time-debounced persistence, per-IP burst coalescing if a
+        # single IP needs sub-2s audit granularity. Without this, a flood/scan
+        # hitting many distinct ports on one IP calls asdict()+json.dumps() on
+        # an ever-growing dst_ports set on every single event -> O(n^2) over
+        # the burst (confirmed root cause of the M5 shutdown-flush hang).
+        now = time.monotonic()
+        last = self._last_persisted.get(src_ip, 0.0)
+        if now - last < min_interval_s:
+            return False
+        self._last_persisted[src_ip] = now
+        return True
+
     def _append_to_disk(self, profile: AttackerProfile) -> None:
         try:
             with _PROFILE_PERSIST_PATH.open("a", encoding="utf-8") as fh:
@@ -349,3 +363,17 @@ class ThreatActorProfiler:
             "top_attacker_ip":    profiles[0].src_ip if profiles else None,
             "max_sophistication": profiles[0].sophistication_score if profiles else 0,
         }
+
+
+if __name__ == "__main__":
+    # Self-check: a burst of same-IP events must not hit disk on every call.
+    p = ThreatActorProfiler(persist=True)
+    for i in range(50):
+        p.ingest({"src_ip": "9.9.9.9", "attack_type": "PortScan",
+                  "dst_port": 1000 + i, "timestamp": datetime.now(tz=timezone.utc)})
+    assert len(p._last_persisted) == 1
+    # 50 calls at t~=0 with a 2s debounce -> exactly 1 disk write for this IP
+    profile = p.get_profile("9.9.9.9")
+    assert profile.event_count == 50, "in-memory profile must still see every event"
+    print("OK: burst of 50 same-IP events debounced to 1 disk write, "
+          f"profile still tracked all {profile.event_count} events")
