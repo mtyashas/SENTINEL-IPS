@@ -81,6 +81,19 @@ _CWR = 0x80
 _BULK_MIN_PKTS  = 4     # consecutive same-direction packets to count as a "bulk"
 _BULK_MAX_GAP_S = 1.0   # max inter-packet gap (s) within a bulk run
 
+# Minimum idle time before a fresh SYN on an already-tracked 5-tuple is
+# treated as a new connection reusing the port, rather than a retransmitted
+# SYN for the same in-progress handshake (TCP's initial RTO is normally
+# >=1s, so 3s comfortably avoids that ambiguity).
+_SYN_REUSE_IDLE_S = 3.0
+
+# Per-packet and per-flow payload capture caps for Layer 2 signature matching
+# (detection/layer2_signatures.py) — bounded so a flow can never accumulate
+# unbounded memory from payload bytes, matching the project's memory-safety
+# standard. Only the first data-carrying packet's payload is kept per flow;
+# injection/XSS/traversal patterns appear at the start of a request.
+_PAYLOAD_CAP_BYTES = 2048
+
 FlowKey = Tuple[str, int, str, int, int]   # (ip_a, port_a, ip_b, port_b, proto)
 
 
@@ -90,12 +103,14 @@ class _PacketInfo:
     __slots__ = (
         "ts", "src_ip", "dst_ip", "proto", "src_port", "dst_port",
         "length", "header_len", "payload_len", "tcp_flags", "tcp_window",
+        "payload",
     )
 
     def __init__(
         self, ts: float, src_ip: str, dst_ip: str, proto: int,
         src_port: int, dst_port: int, length: int, header_len: int,
         payload_len: int, tcp_flags: int, tcp_window: int,
+        payload: bytes = b"",
     ) -> None:
         self.ts          = ts
         self.src_ip       = src_ip
@@ -108,6 +123,7 @@ class _PacketInfo:
         self.payload_len  = payload_len
         self.tcp_flags    = tcp_flags
         self.tcp_window   = tcp_window
+        self.payload      = payload
 
 
 def _parse_packet(pkt) -> Optional[_PacketInfo]:
@@ -122,6 +138,8 @@ def _parse_packet(pkt) -> Optional[_PacketInfo]:
     src_port = dst_port = 0
     tcp_flags = tcp_window = 0
 
+    payload_bytes = b""
+
     if TCP in pkt:
         tcp        = pkt[TCP]
         src_port   = int(tcp.sport)
@@ -129,11 +147,18 @@ def _parse_packet(pkt) -> Optional[_PacketInfo]:
         tcp_flags  = int(tcp.flags)
         tcp_window = int(tcp.window)
         header_len += int(getattr(tcp, "dataofs", 5) or 5) * 4
+        # Bounded at extraction time (not just truncated later) so a single
+        # oversized packet can't inflate per-packet memory before capping —
+        # Layer 2 signature matching only needs the first _PAYLOAD_CAP_BYTES
+        # to catch injection/XSS/traversal patterns, which appear early in
+        # a request (query string, form body prefix, headers).
+        payload_bytes = bytes(tcp.payload)[:_PAYLOAD_CAP_BYTES]
     elif UDP in pkt:
         udp      = pkt[UDP]
         src_port = int(udp.sport)
         dst_port = int(udp.dport)
         header_len += 8
+        payload_bytes = bytes(udp.payload)[:_PAYLOAD_CAP_BYTES]
 
     payload_len = max(length - header_len, 0)
     ts = float(getattr(pkt, "time", time.time()))
@@ -143,6 +168,7 @@ def _parse_packet(pkt) -> Optional[_PacketInfo]:
         src_port=src_port, dst_port=dst_port, length=length,
         header_len=header_len, payload_len=payload_len,
         tcp_flags=tcp_flags, tcp_window=tcp_window,
+        payload=payload_bytes,
     )
 
 
@@ -192,6 +218,7 @@ class _FlowState:
         self.init_win_bwd: Optional[int] = None
         self.act_data_pkt_fwd = 0
         self.min_seg_size_fwd: Optional[int] = None
+        self.payload_sample: bytes = b""   # first data-carrying packet only
 
         # Bulk-transfer run tracking (best-effort — see module docstring)
         self._bulk_dir: Optional[str] = None
@@ -233,6 +260,9 @@ class _FlowState:
 
         self.last_ts = pi.ts
         self.all_ts.append(pi.ts)
+
+        if not self.payload_sample and pi.payload:
+            self.payload_sample = pi.payload
 
         if direction == "fwd":
             self.fwd_lengths.append(float(pi.length))
@@ -435,6 +465,11 @@ class _FlowState:
             "idle_std":  float(np.std(self.idle_periods))  * 1e6 if self.idle_periods else 0.0,
             "idle_max":  float(np.max(self.idle_periods))  * 1e6 if self.idle_periods else 0.0,
             "idle_min":  float(np.min(self.idle_periods))  * 1e6 if self.idle_periods else 0.0,
+            # For Layer 2 signature matching (detection/layer2_signatures.py)
+            # — not a numeric feature, automatically excluded from every
+            # ML/ANOVA feature path via their existing select_dtypes(number)
+            # filters. Best-effort decode; injection/XSS patterns are ASCII.
+            "payload_sample": self.payload_sample.decode("utf-8", errors="replace"),
         }
 
     @staticmethod
@@ -517,6 +552,29 @@ class FlowCollector:
 
         with self._lock:
             state = self._flows.get(key)
+
+            # A fresh SYN (SYN set, ACK not set) on a 5-tuple that already
+            # has an open flow means the OS reused this port for a new
+            # connection while the old one never got a proper close (e.g. a
+            # flood/scan packet that got no RST/FIN response, common under
+            # sustained attack traffic). Without this, the new connection's
+            # packets silently merge into the stale flow's accumulated
+            # state — confirmed in the M5 lab capture: a real HTTP request
+            # landed on a port an hping3 flood packet had used 215s earlier,
+            # and its payload was lost because payload_sample's first-write
+            # -wins rule had already been claimed by the ancient flow.
+            # Gated on idle time so a legitimate rapid SYN retransmission
+            # (RTO is normally >=1s) during an in-progress handshake isn't
+            # mistaken for a new connection and split into two flow rows.
+            is_new_syn = bool(pi.tcp_flags & _SYN) and not (pi.tcp_flags & _ACK)
+            if state is not None and is_new_syn and pi.ts - state.last_ts > _SYN_REUSE_IDLE_S:
+                state.closed_by = "reused_port"
+                self._completed.append(state.to_row())
+                self._n_flows_completed += 1
+                del self._flows[key]
+                self._creation_order.remove(key)
+                state = None
+
             if state is None:
                 if len(self._flows) >= self._max_open:
                     self._evict_oldest_locked()

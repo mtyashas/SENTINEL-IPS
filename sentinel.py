@@ -282,6 +282,9 @@ class SentinelIPS:
         # --- Layer 1: ML inference ---
         chunk = self._run_layer1(chunk)
 
+        # --- Layer 2: signature matching on captured payload samples ---
+        chunk = self._run_signatures(chunk)
+
         # --- Layer 3: anomaly detection (fit on first non-trivial chunk) ---
         chunk = self._run_anomaly(chunk)
 
@@ -378,6 +381,53 @@ class SentinelIPS:
             return chunk
 
     # ------------------------------------------------------------------
+    # Layer 2: signature matching
+    # ------------------------------------------------------------------
+
+    def _run_signatures(self, chunk: pd.DataFrame) -> pd.DataFrame:
+        """
+        Match each flow's captured payload sample (core.flow_collector's
+        payload_sample column) against known injection/XSS/traversal
+        patterns. Payload-based attacks (SQLi, XSS) are structurally
+        invisible to Layer 1's flow-statistics features -- this is the only
+        layer that can catch them, independent of what Layer 1 predicted.
+
+        A signature match is a high-precision exact pattern hit, so it
+        promotes pred_binary to 1 and floors confidence at 0.90 regardless
+        of Layer 1's own score, and its attack_type takes priority over the
+        ML-derived one in _build_event().
+        """
+        if "payload_sample" not in chunk.columns:
+            return chunk
+        try:
+            sig_types = pd.Series(None, index=chunk.index, dtype=object)
+            for idx, payload in chunk["payload_sample"].items():
+                if not payload:
+                    continue
+                hit = self._sig.check_payload(payload)
+                if hit["detected"]:
+                    sig_types.at[idx] = hit["attack_type"]
+
+            detected_mask = sig_types.notna()
+            if not detected_mask.any():
+                return chunk
+
+            chunk = chunk.copy()
+            chunk["sig_attack_type"] = sig_types
+            if "pred_binary" in chunk.columns:
+                chunk.loc[detected_mask, "pred_binary"] = 1
+            else:
+                chunk["pred_binary"] = detected_mask.astype(int)
+            if "confidence" in chunk.columns:
+                chunk.loc[detected_mask, "confidence"] = \
+                    chunk.loc[detected_mask, "confidence"].clip(lower=0.90)
+            else:
+                chunk.loc[detected_mask, "confidence"] = 0.90
+        except Exception as exc:
+            logger.debug("Layer2 signature check error: %s", exc)
+        return chunk
+
+    # ------------------------------------------------------------------
     # Layer 3: anomaly detection
     # ------------------------------------------------------------------
 
@@ -433,13 +483,21 @@ class SentinelIPS:
 
     def _build_event(self, row: pd.Series) -> Optional[dict]:
         try:
-            attack_type = str(row.get("attack_class", "Unknown"))
-            if attack_type in ("0", "BENIGN", "nan", ""):
-                # Use anomaly score to guess ZeroDay
-                if float(row.get("anomaly_score", 0)) >= 0.2:
-                    attack_type = "ZeroDay"
-                else:
-                    attack_type = "Unknown"
+            sig_type = row.get("sig_attack_type")
+            if sig_type and str(sig_type) not in ("nan", "None", ""):
+                # A signature match is an exact pattern hit on the payload --
+                # takes priority over the ML-derived label, which for a
+                # payload-based attack (SQLi/XSS) is only ever a generic
+                # flow-shape guess since Layer 1 never sees payload content.
+                attack_type = str(sig_type)
+            else:
+                attack_type = str(row.get("attack_class", "Unknown"))
+                if attack_type in ("0", "BENIGN", "nan", ""):
+                    # Use anomaly score to guess ZeroDay
+                    if float(row.get("anomaly_score", 0)) >= 0.2:
+                        attack_type = "ZeroDay"
+                    else:
+                        attack_type = "Unknown"
 
             return {
                 "attack_type": attack_type,

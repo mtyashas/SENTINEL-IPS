@@ -386,7 +386,13 @@ XSS_PATTERNS: list[str] = [
 ]
 
 COMMAND_INJECTION_PATTERNS: list[str] = [
-    r"[;&|`]",
+    # A bare single "&" matches every ordinary URL-encoded form POST body
+    # (key1=val1&key2=val2) -- confirmed as a live false-positive source
+    # once Layer 2 was actually wired into the pipeline (2026-07-28):
+    # relabelled every hydra brute-force credential POST as CommandInject.
+    # Real shell chaining uses ";", "|", backticks, or doubled "&&"; a
+    # single "&" alone is not command-injection syntax.
+    r"[;|`]|&&",
     r"\$\(.*\)",
     r"wget\s+http",
     r"curl\s+http",
