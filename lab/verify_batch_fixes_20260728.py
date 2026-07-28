@@ -101,9 +101,30 @@ def check_narrator_wired():
           "(see 'NARRATIVE:' log line above)")
 
 
+def check_shap_sampling_burst():
+    print("\n--- Check 5: a bursty chunk doesn't spam SHAP on every attack row ---")
+    print("    (found live: 454 of 1027 attacks triggered SHAP+narration in one session,")
+    print("     not the intended ~2 -- _n_attacks was only updated once per whole chunk,")
+    print("     so the % _EXPLAIN_EVERY check saw a stale value for every row in the loop)")
+    ips = SentinelIPS(model_path=str(MODEL_DIR / "benchmarkids_binary.pkl"))
+    # A signature-detected payload, not a plain benign GET -- needs
+    # pred_binary=1 (forced by Layer 2 regardless of Layer 1's own score)
+    # so these rows actually reach _process_attacks() at all.
+    one_flow = make_flow(b"GET /search?q=' OR '1'='1 HTTP/1.1\r\nHost: 10.0.0.1\r\n\r\n")
+    burst = pd.concat([one_flow] * 600, ignore_index=True)
+    ips.process_chunk(burst)
+    assert ips._n_attacks == 600, f"expected 600 attacks counted, got {ips._n_attacks}"
+    assert ips._n_explained == 1, (
+        f"a 600-row burst starting from 0 should trigger SHAP exactly once "
+        f"(at row 500), got {ips._n_explained}"
+    )
+    print(f"OK: 600-row burst -> _n_attacks=600, _n_explained={ips._n_explained} (expected 1)")
+
+
 if __name__ == "__main__":
     check_command_inject_not_sql()
     check_severity_response_entries()
     check_phishing_end_to_end()
     check_narrator_wired()
+    check_shap_sampling_burst()
     print("\nAll batch-fix checks passed.")

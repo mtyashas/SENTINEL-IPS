@@ -305,10 +305,9 @@ class SentinelIPS:
             return chunk
 
         attack_rows = chunk[attack_mask].copy()
-        self._process_attacks(attack_rows)
+        self._process_attacks(attack_rows)  # increments self._n_attacks per row
 
-        self._n_flows   += len(chunk)
-        self._n_attacks += int(attack_mask.sum())
+        self._n_flows += len(chunk)
         self._monitor.record_throughput(self._estimate_fps(len(chunk)))
 
         # --- Periodic zero-day mining ---
@@ -336,6 +335,18 @@ class SentinelIPS:
             event = self._build_event(row)
             if event is None:
                 continue
+
+            # Counted per row (not once per chunk in process_chunk()) so the
+            # _EXPLAIN_EVERY sampling check below sees an accurate running
+            # total. It used to check the pre-chunk self._n_attacks value,
+            # which stays constant for every row in the loop -- if it
+            # happened to already be a multiple of _EXPLAIN_EVERY (e.g.
+            # early in a session, near 0), a single bursty chunk (a port
+            # scan landing dozens of rows in one 2s batch) triggered SHAP +
+            # AttackNarrator on nearly every row instead of roughly 1 in
+            # _EXPLAIN_EVERY -- confirmed live: 454 of 1027 attacks in one
+            # session, not the intended ~2.
+            self._n_attacks += 1
 
             # Intel
             event = self._run_intel(event)
