@@ -605,7 +605,12 @@ class SentinelIPS:
         try:
             annotated = self._mitre.annotate_event(event)
             event["mitre_tactic"]     = annotated.get("mitre_tactic",     "Unknown")
-            event["mitre_technique"]  = annotated.get("mitre_technique",  "T0000")
+            # annotate_event() returns the technique ID under
+            # "mitre_technique_id", not "mitre_technique" -- this looked up
+            # the wrong key, so every detection's logged MITRE technique
+            # has always silently fallen back to the T0000 placeholder,
+            # this whole project, regardless of attack type.
+            event["mitre_technique"]  = annotated.get("mitre_technique_id", "T0000")
             event["mitre_technique_name"] = annotated.get("mitre_technique_name", "")
         except Exception:
             event["mitre_tactic"] = MITRE_ATTACK_MAP.get(
