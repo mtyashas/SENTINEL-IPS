@@ -27,12 +27,13 @@ Usage:
 """
 
 import argparse
+import ast
 import gc
 import logging
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 # Ensure project root is on sys.path
 _ROOT = Path(__file__).resolve().parent
@@ -903,6 +904,72 @@ def _run_live(args) -> None:
 # Health check mode
 # ---------------------------------------------------------------------------
 
+def _check_pipeline_wiring() -> List[str]:
+    """
+    Static check: every self._xxx module instantiated in SentinelIPS.__init__
+    must be called as self._xxx.method(...) somewhere else in the class.
+
+    Catches modules that import cleanly and get instantiated (so the plain
+    import-only check above passes) but are never actually invoked in the
+    live pipeline -- exactly the bug found in Layer 2 (SignatureDetector sat
+    fully built and unit-tested but completely disconnected from
+    process_chunk() for the whole project) and, in the same audit,
+    AttackNarrator and ThreatFeedAggregator. Import success only proves a
+    module *can* run; it says nothing about whether anything ever calls it.
+
+    AST-based rather than regex: robust to formatting/comments/strings that
+    happen to contain "self._xxx" text without it being a real reference.
+
+    Outputs: sorted list of attribute names assigned but never called
+             (empty list if every instantiated module is wired up)
+    """
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+
+    sentinel_cls = next(
+        (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "SentinelIPS"),
+        None,
+    )
+    if sentinel_cls is None:
+        return []
+
+    init_method = next(
+        (n for n in sentinel_cls.body if isinstance(n, ast.FunctionDef) and n.name == "__init__"),
+        None,
+    )
+    if init_method is None:
+        return []
+
+    # self._xxx = SomeClass(...) assignments in __init__ -- restricted to
+    # calls whose constructor name is capitalised (this codebase's
+    # consistent class-naming convention), so scalar state like
+    # self._session_start = time.monotonic() isn't mistaken for a module
+    # instantiation just because it's also an assigned Call node.
+    assigned: set = set()
+    for node in ast.walk(init_method):
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Attribute)
+                and isinstance(node.targets[0].value, ast.Name)
+                and node.targets[0].value.id == "self"
+                and isinstance(node.value, ast.Call)):
+            continue
+        func = node.value.func
+        ctor_name = func.id if isinstance(func, ast.Name) else \
+            func.attr if isinstance(func, ast.Attribute) else ""
+        if ctor_name[:1].isupper():
+            assigned.add(node.targets[0].attr)
+
+    # self._xxx.method(...) calls anywhere in the class
+    called: set = set()
+    for node in ast.walk(sentinel_cls):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Attribute)
+                and isinstance(node.func.value.value, ast.Name)
+                and node.func.value.value.id == "self"):
+            called.add(node.func.value.attr)
+
+    return sorted(assigned - called)
+
+
 def _run_health(args) -> None:
     """Import-only health check — verifies all 32 modules load cleanly."""
     _modules = [
@@ -936,12 +1003,25 @@ def _run_health(args) -> None:
     for m, e in fail:
         print(f"FAIL: {m}")
         print(f"      {e}")
-    if not fail:
-        print("\nAll 32 modules operational.")
+
+    print()
+    print("Pipeline wiring check (instantiated modules that are never called)")
+    print("=" * 55)
+    dead = _check_pipeline_wiring()
+    if dead:
+        print(f"FAIL: {len(dead)} module(s) instantiated in SentinelIPS.__init__ but "
+              f"never invoked anywhere in the pipeline:")
+        for name in dead:
+            print(f"      self.{name}")
+    else:
+        print("OK  : every instantiated module is called somewhere in the pipeline")
+
+    if not fail and not dead:
+        print("\nAll 32 modules operational and wired into the pipeline.")
         print("Run: python train.py   to train models")
         print("Run: python sentinel.py simulate   to process data")
         print("Run: streamlit run dashboard/app.py   to open dashboard")
-    sys.exit(0 if not fail else 1)
+    sys.exit(0 if not fail and not dead else 1)
 
 
 # ---------------------------------------------------------------------------
