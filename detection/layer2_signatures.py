@@ -20,6 +20,7 @@ Usage:
         print(result["attack_type"], result["mitre_technique"])
 """
 
+import ipaddress
 import logging
 import re
 from typing import Dict, List, Optional
@@ -79,14 +80,21 @@ _PHISHING_HOMOGRAPH_PATTERNS: List[str] = [
     r"faceb[o0]{2}k",
 ]
 
-_PHISHING_URL_PATTERNS: List[str] = [
+_PHISHING_SHORTENER_PATTERNS: List[str] = [
     r"bit\.ly/",
     r"tinyurl\.com/",
     r"t\.co/",
     r"goo\.gl/",
     r"is\.gd/",
-    r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/",   # raw-IP URLs
 ]
+
+# Raw-IP-as-host is a real phishing indicator for public IPs (masking the
+# true destination), but a normal, benign pattern for internal tooling on
+# a private network -- checked separately in check_url() so it can be
+# skipped for private/loopback hosts instead of flagging every request in
+# an internal deployment (or this project's own lab, which addresses every
+# request by a 192.168.56.x host) as phishing.
+_RAW_IP_URL_PATTERN = re.compile(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/")
 
 _BRUTE_FORCE_HEADER_PATTERNS: List[str] = [
     r"Basic\s+[A-Za-z0-9+/=]{4,}",   # many distinct Basic auth attempts
@@ -170,7 +178,7 @@ class SignatureDetector:
             re.compile(p, flags) for p in _PHISHING_HOMOGRAPH_PATTERNS
         ]
         self._phish_url_re: List[re.Pattern] = [
-            re.compile(p, flags) for p in _PHISHING_URL_PATTERNS
+            re.compile(p, flags) for p in _PHISHING_SHORTENER_PATTERNS
         ]
         self._brute_re: List[re.Pattern] = [
             re.compile(p, flags) for p in _BRUTE_FORCE_HEADER_PATTERNS
@@ -268,10 +276,21 @@ class SignatureDetector:
         if hit:
             return hit
 
-        # URL shortener / raw-IP check
+        # URL shortener check
         hit = self._first_match(decoded_url, self._phish_url_re, "Phishing")
         if hit:
             return hit
+
+        # Raw-IP-as-host check, skipped for private/loopback IPs (see
+        # _RAW_IP_URL_PATTERN comment)
+        ip_match = _RAW_IP_URL_PATTERN.search(decoded_url)
+        if ip_match:
+            try:
+                is_private = ipaddress.ip_address(ip_match.group(1)).is_private
+            except ValueError:
+                is_private = False
+            if not is_private:
+                return _detection("Phishing", "raw_ip_host")
 
         # Embedded injection in URL
         hit = self._first_match(decoded_url, self._sql_re, "SQLInjection")

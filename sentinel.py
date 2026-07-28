@@ -30,6 +30,7 @@ import argparse
 import ast
 import gc
 import logging
+import re
 import sys
 import time
 from pathlib import Path
@@ -144,6 +145,12 @@ _BLOCK_ACTION_DURATIONS = {
     "ip_block_24h": 86400,
     "ip_block":     3600,
 }
+
+# Matches an HTTP request line's path+query, e.g. "GET /search?q=x HTTP/1.1"
+# -> "/search?q=x", so a URL can be reconstructed for SignatureDetector's
+# phishing/homograph/shortener checks (check_payload() alone never runs
+# those -- it only checks injection patterns, not URL-shape indicators).
+_REQUEST_LINE_RE = re.compile(r"^(?:GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH)\s+(\S+)\s+HTTP/")
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +364,7 @@ class SentinelIPS:
 
             # SHAP narration (sampled)
             if self._n_attacks % _EXPLAIN_EVERY == 0:
-                self._run_explanation(attacks.head(1))
+                self._run_explanation(attacks.head(1), event)
 
             # Dashboard feed
             self._monitor.push_event(event)
@@ -401,11 +408,34 @@ class SentinelIPS:
         if "payload_sample" not in chunk.columns:
             return chunk
         try:
+            has_dst_ip = "dst_ip" in chunk.columns
             sig_types = pd.Series(None, index=chunk.index, dtype=object)
             for idx, payload in chunk["payload_sample"].items():
                 if not payload:
                     continue
                 hit = self._sig.check_payload(payload)
+                if not hit["detected"]:
+                    # check_payload() only checks injection patterns; the
+                    # phishing/homograph/shortener checks live on
+                    # check_url(), which needs an actual URL reconstructed
+                    # from the request line + destination IP.
+                    match = _REQUEST_LINE_RE.match(payload)
+                    if match:
+                        dst_ip = chunk.at[idx, "dst_ip"] if has_dst_ip else ""
+                        url = f"http://{dst_ip}{match.group(1)}"
+                        hit = self._sig.check_url(url)
+                        if not hit["detected"]:
+                            # External reputation check (VirusTotal-backed);
+                            # a graceful no-op without VIRUSTOTAL_API_KEY
+                            # configured, but real detection once it is --
+                            # ThreatFeedAggregator.check_ip() is skipped
+                            # here as pure duplication of IPReputationScorer
+                            # (identical local-blacklist/Tor/AbuseIPDB
+                            # sources), unlike check_url() which nothing
+                            # else in the pipeline covers.
+                            vt = self._threat.check_url(url)
+                            if vt.is_threat:
+                                hit = {"detected": True, "attack_type": "Phishing"}
                 if hit["detected"]:
                     sig_types.at[idx] = hit["attack_type"]
 
@@ -664,7 +694,7 @@ class SentinelIPS:
     # SHAP narration (sampled)
     # ------------------------------------------------------------------
 
-    def _run_explanation(self, sample_df: pd.DataFrame) -> None:
+    def _run_explanation(self, sample_df: pd.DataFrame, event: dict) -> None:
         if self._layer1 is None:
             return
         try:
@@ -687,6 +717,9 @@ class SentinelIPS:
                 importance = self._shap.global_importance(shap_res)
                 logger.info("SHAP top feature: %s (%.1f%%)",
                             importance[0][0], importance[0][1])
+
+                narration = self._narrator.narrate(shap_res, event)
+                logger.info("NARRATIVE: %s — %s", narration.headline, narration.body)
         except Exception as exc:
             logger.debug("SHAP narration error: %s", exc)
 

@@ -255,6 +255,8 @@ RESPONSE_MATRIX: dict[str, list[str]] = {
     "BruteForce":   ["ip_block_1h", "invalidate_sessions", "alert_medium"],
     "SQLInjection": ["block_request", "alert_medium", "log_payload"],
     "XSS":          ["sanitize_input", "block_request", "alert_medium"],
+    "CommandInject": ["block_request", "ip_block_1h", "alert_high", "log_payload"],
+    "PathTraversal": ["block_request", "ip_block_1h", "alert_high", "log_payload"],
     "Phishing":     ["block_domain", "alert_medium", "notify_admin"],
     "Bot":          ["ip_block", "c2_domain_block", "alert_high"],
     "Infiltration": ["isolate_connection", "alert_critical", "log_pcap"],
@@ -269,7 +271,7 @@ RESPONSE_MATRIX: dict[str, list[str]] = {
 
 SEVERITY_LEVELS: dict[str, list[str]] = {
     "CRITICAL": ["Infiltration", "ZeroDay", "Heartbleed", "APT"],
-    "HIGH":     ["DDoS", "DoS", "Bot", "Ransomware"],
+    "HIGH":     ["DDoS", "DoS", "Bot", "Ransomware", "CommandInject", "PathTraversal"],
     "MEDIUM":   ["BruteForce", "SQLInjection", "XSS"],
     "LOW":      ["PortScan", "Phishing"],
     "INFO":     ["Reconnaissance"],
@@ -369,7 +371,16 @@ LAB_HOST_ONLY_SUBNET   = "192.168.56.0/24"   # reference only — see lab/README
 
 SQL_INJECTION_PATTERNS: list[str] = [
     r"(\%27)|(\')|(\-\-)|(\%23)|(#)",
-    r"((\%3D)|(=))[^\n]*((\%27)|(\')|(\-\-)|(\%3B)|(;))",
+    # Bare ";"/"%3B" deliberately excluded from this alternation: a
+    # semicolon after "param=" is exactly as consistent with shell command
+    # chaining as with SQL statement stacking (confirmed live -- a pure
+    # CommandInject test payload, "q=; wget ...", matched this pattern
+    # before ever reaching the command-injection check, since SQL patterns
+    # are checked first). Quote/comment markers are genuinely SQL-specific
+    # and stay; stacked-query detection without those still works via the
+    # keyword-anchored ";\s*(DROP|DELETE|UPDATE|INSERT)" pattern in
+    # detection/layer2_signatures.py's _EXTRA_SQL_PATTERNS.
+    r"((\%3D)|(=))[^\n]*((\%27)|(\')|(\-\-))",
     r"UNION.+SELECT",
     r"INSERT\s+INTO",
     r"DROP\s+TABLE",
