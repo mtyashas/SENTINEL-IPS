@@ -390,7 +390,11 @@ SQL_INJECTION_PATTERNS: list[str] = [
 XSS_PATTERNS: list[str] = [
     r"<script[^>]*>.*?</script>",
     r"javascript:",
-    r"on\w+\s*=",
+    # Word-boundary anchored: unanchored "on\w+\s*=" matches "on" as a
+    # substring anywhere, not just at the start of an event-handler
+    # attribute -- confirmed live, matching "sessionid=" (contains
+    # "...ONid=") in an ordinary Cookie header.
+    r"\bon\w+\s*=",
     r"<iframe",
     r"document\.cookie",
     r"eval\(",
@@ -401,9 +405,15 @@ COMMAND_INJECTION_PATTERNS: list[str] = [
     # (key1=val1&key2=val2) -- confirmed as a live false-positive source
     # once Layer 2 was actually wired into the pipeline (2026-07-28):
     # relabelled every hydra brute-force credential POST as CommandInject.
-    # Real shell chaining uses ";", "|", backticks, or doubled "&&"; a
-    # single "&" alone is not command-injection syntax.
-    r"[;|`]|&&",
+    # A bare ";" is just as bad: standard browser User-Agent syntax
+    # ("Mozilla/5.0 (X11; Linux x86_64)...") always contains one -- also
+    # confirmed live, via slowhttptest's default User-Agent, relabelling
+    # an entire Slowloris-style DoS test as CommandInject. Pipe/backtick/
+    # doubled-"&" stay bare (not observed in ordinary HTTP header syntax);
+    # ";" now requires a recognisable shell command right after it, which
+    # real chaining has and "; Linux x86_64" or "; q=0.9" do not.
+    r"[|`]|&&",
+    r";\s*(ls|cat|whoami|id|pwd|uname|wget|curl|nc|bash|sh|python[23]?|perl|rm|chmod|kill|ping|ifconfig|netstat|ps)\b",
     r"\$\(.*\)",
     r"wget\s+http",
     r"curl\s+http",
