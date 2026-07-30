@@ -1,0 +1,56 @@
+SENTINEL IPS — LIVE DEMO COMMAND SHEET
+========================================
+
+TERMINAL SETUP (Windows host)
+------------------------------
+
+Window 1 — target service:
+  cd "C:\Users\mtyas\OneDrive\Desktop\MAJOR_PROJECT"
+  .\venv\Scripts\Activate.ps1
+  python lab\target_service.py --host 192.168.56.1 --port 80
+
+Window 2 — SENTINEL live capture (must be Administrator):
+  cd "C:\Users\mtyas\OneDrive\Desktop\MAJOR_PROJECT"
+  .\venv\Scripts\Activate.ps1
+  python sentinel.py live --interface "Ethernet 2" --model models\benchmarkids_binary.pkl
+
+(If PowerShell blocks venv activation with an execution-policy error, run once:
+  Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass)
+
+
+BENIGN TRAFFIC (Ubuntu VM, 192.168.56.20)
+------------------------------------------
+  ssh mt-yashas@192.168.56.20
+  bash gen_benign_traffic.sh 2000 192.168.56.1
+
+Let this run ~1-2 min before starting attacks, so the anomaly-detector
+baseline settles on clean traffic first.
+
+
+ATTACK COMMANDS (Kali VM, 192.168.56.10)
+------------------------------------------
+  ssh kali@192.168.56.10
+
+SQL Injection:
+  date; curl -G "http://192.168.56.1/search" --data-urlencode "q=' UNION SELECT NULL--"; date
+
+Command Injection:
+  date; curl "http://192.168.56.1/search?q=;cat%20/etc/passwd"; date
+
+Path Traversal:
+  date; curl "http://192.168.56.1/../../../../etc/passwd"; date
+
+DoS (SYN flood):
+  date; hping3 -S --flood -p 80 192.168.56.1; date
+  (Ctrl+C to stop the flood)
+
+
+WHAT TO WATCH
+--------------
+- Live capture window (Window 2): each detection prints a DETECTION line
+  with attack type, confidence, severity, MITRE mapping, and response
+  action taken — that's the main thing to point at during the demo.
+- logs\sentinel.log — full persisted log, same DETECTION lines.
+- threat_intel\ip_blacklist.txt — permanent blocks only; timed blocks
+  (most of these) show as "Blocked ... via noop reason=..." in the log
+  instead, not in this file.

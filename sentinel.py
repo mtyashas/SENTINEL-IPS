@@ -424,6 +424,17 @@ class SentinelIPS:
             for idx, payload in chunk["payload_sample"].items():
                 if not payload:
                     continue
+                if "�" in payload:
+                    # payload_sample is decoded utf-8 with errors="replace"
+                    # (core/flow_collector.py) -- a U+FFFD means the raw
+                    # bytes weren't valid text to begin with. Real HTTP
+                    # payloads (what every pattern below is designed for)
+                    # are always valid ASCII/UTF-8; binary protocols aren't.
+                    # Confirmed live 2026-07-30: an ISAKMP (UDP/500) probe's
+                    # structured binary header coincidentally contained a
+                    # 0x7C byte, matching COMMAND_INJECTION_PATTERNS' "[|`]"
+                    # and getting genuinely blocked as CommandInject.
+                    continue
                 hit = self._sig.check_payload(payload)
                 if not hit["detected"]:
                     # check_payload() only checks injection patterns; the
