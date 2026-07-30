@@ -535,8 +535,13 @@ class SentinelIPS:
             else:
                 attack_type = str(row.get("attack_class", "Unknown"))
                 if attack_type in ("0", "BENIGN", "nan", ""):
-                    # Use anomaly score to guess ZeroDay
-                    if float(row.get("anomaly_score", 0)) >= 0.2:
+                    # anomaly_detected is Layer 3's own IsolationForest.predict()
+                    # verdict (contamination-thresholded). anomaly_score is the
+                    # raw decision_function value, where *more negative* means
+                    # more anomalous (see detection/layer3_anomaly.py) -- a
+                    # previous ">= 0.2" check here had that polarity backwards
+                    # and so never actually caught an anomalous flow.
+                    if bool(row.get("anomaly_detected", False)):
                         attack_type = "ZeroDay"
                     else:
                         attack_type = "Unknown"

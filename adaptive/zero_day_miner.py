@@ -40,7 +40,7 @@ from config import ENGINEERED_FEATURES, THREAT_DIR
 logger = logging.getLogger(__name__)
 
 _PATTERNS_PATH      = THREAT_DIR / "zero_day_patterns.jsonl"
-_MIN_ANOMALY_SCORE  = 0.1       # IsolationForest score above this → candidate
+_MIN_ANOMALY_SCORE  = 0.1       # IsolationForest score below -this → candidate
 _DBSCAN_EPS         = 0.5       # neighbourhood radius in scaled feature space
 _DBSCAN_MIN_SAMPLES = 5         # minimum flows to form a cluster
 _MAX_CANDIDATES     = 10_000    # cap on flows sent to DBSCAN (memory safety)
@@ -64,7 +64,8 @@ class ZeroDayMiner:
     Unsupervised zero-day cluster miner using DBSCAN.
 
     Workflow:
-      1. Filter incoming flows to those with anomaly_score >= _MIN_ANOMALY_SCORE
+      1. Filter incoming flows to those with anomaly_score <= -_MIN_ANOMALY_SCORE
+         (IsolationForest decision_function: more negative = more anomalous)
       2. Select numeric feature columns; drop constant columns
       3. Scale features to zero mean / unit variance
       4. Run DBSCAN to identify dense clusters of similar unknown flows
@@ -223,7 +224,7 @@ class ZeroDayMiner:
         """
         Run a full zero-day mining pass on a DataFrame of anomalous flows.
 
-        Only flows with anomaly_score >= _MIN_ANOMALY_SCORE are processed.
+        Only flows with anomaly_score <= -_MIN_ANOMALY_SCORE are processed.
         Results are accumulated in self.patterns and persisted to disk.
 
         Inputs:
@@ -239,7 +240,7 @@ class ZeroDayMiner:
 
         # Filter to high-anomaly candidates
         if "anomaly_score" in df.columns:
-            candidates = df[df["anomaly_score"] >= _MIN_ANOMALY_SCORE].copy()
+            candidates = df[df["anomaly_score"] <= -_MIN_ANOMALY_SCORE].copy()
         else:
             candidates = df.copy()
 
