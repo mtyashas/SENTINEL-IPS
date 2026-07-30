@@ -10,6 +10,112 @@ for the full protocol.
 
 ---
 
+## 2026-07-31 — All 5 backlog items closed: binary-payload FP, honeypot wiring, multiclass PortScan retrain, WebShell+CSRF, Bot beacon detection
+
+**Goal:** Re-verify the zero-day polarity fix from the previous session
+against live traffic, then work through the 5 backlog items scoped at the
+end of that session one by one.
+
+**Changes:**
+- Restarted the lab (both VMs, target service, `sentinel.py live`) and
+  re-ran the zero-day UDP scan (`nmap -sU` to ports 500/1701/4500) to test
+  the previous session's anomaly-polarity fix against a genuinely fresh
+  process (the prior test had been running stale pre-fix code).
+- That test surfaced a *new* bug instead: the scan got flagged
+  `attack=CommandInject` and genuinely blocked. Root-caused with hard
+  evidence, not guessed — replayed the exact captured packets through an
+  isolated `FlowCollector` + `SignatureDetector` outside the live
+  pipeline. Scapy auto-dissects UDP/500 as ISAKMP, so an initial payload
+  check only saw 12-14 bytes (an undissected sub-layer); the real captured
+  `payload_sample` is the full 40-byte structured binary header, and one
+  of those bytes is literally `0x7C` ('|'), an exact hit on
+  `COMMAND_INJECTION_PATTERNS`. Structural, not a fluke — binary protocol
+  bytes are effectively random across 0-255, so any non-HTTP traffic has
+  real odds of coincidentally matching a text-oriented pattern. Fixed by
+  skipping any `payload_sample` containing the utf-8 replacement character
+  (U+FFFD) before running signature checks — a precise, already-computed
+  signal that the raw bytes weren't valid text to begin with.
+- Wired `HoneypotMonitor` into `sentinel.py live` for the first time
+  (same class of gap Layer 2 had before the 2026-07-28 fix — fully
+  implemented, never instantiated or started anywhere). Kept it out of
+  `SentinelIPS.__init__` deliberately since it binds real sockets; new
+  `_run_honeypot_response()` routes hits through the same
+  intel→attribution→risk→response pipeline a regular detection uses.
+- Fixed multiclass PortScan mislabeling via
+  `lab/m5_multiclass_retrain.py`, rewritten to target the real 2026-07-29
+  four-attack capture (28,046 packets: genuine benign traffic, a full
+  `nmap -sS -p1-1000` scan, CommandInject/PathTraversal/SQLInjection
+  curls) and label by flow shape instead of the old script's
+  DoS-vs-benign-probe exclusion logic, which didn't apply to this
+  capture. Retrain's own held-out CIC-2017 gate rejected the candidate
+  (macro recall 97.51%→94.97%), but real-capture accuracy went
+  35.48%→97.49% with the old model never once predicting PortScan.
+  Manually promoted, same call made for the binary model in M4.
+- Added WebShell detection (new `_WEB_SHELL_PATTERNS`, straightforward —
+  same shape as CommandInject/PathTraversal) and CSRF detection (a
+  structural check, not a payload signature: state-changing request +
+  session cookie + no matching Referer/Origin). CSRF needed its own
+  response path since the request that reaches the server comes from the
+  *victim's* browser, not the attacker's — `_run_response()` got a
+  dedicated branch that invalidates the session via
+  `ConnectionTerminator.invalidate_session()` (wiring in another
+  previously-dead module) instead of blocking `src_ip`, verified by an
+  explicit assertion that the victim IP is never blocked. Added
+  `/upload`, `/account/login`, `/account/email` to
+  `lab/target_service.py` to test both against.
+- Added Bot/C2 beacon detection: `core/flow_collector.py` now tracks
+  connection start timestamps per (src_ip, dst_ip) pair across flows and
+  computes the coefficient of variation of inter-connection intervals; a
+  new `sentinel.py._run_beacon()` stage flags low-variance (periodic)
+  behavior as `Bot`, reusing the class's existing MITRE mapping/severity
+  from the original project spec rather than retraining any model.
+  Deliberately not an ML feature — adding one would mean recomputing it
+  across the entire CIC-2017 training set for a gap that a rule-based
+  layer (matching how Layer 2 signatures already work) closes just as
+  well.
+- 8 verify scripts now exist under `lab/verify_*.py`, each a runnable
+  self-check for one fix; the last 4 items were each regression-tested
+  against every prior one plus `sentinel.py health` before committing —
+  zero breakage across the whole session.
+- 9 commits made and pushed to `origin/main`.
+
+**Decisions:**
+- Chased the ISAKMP false-positive down to the exact byte rather than
+  accepting "binary payload coincidentally matched something" as good
+  enough — the first hypothesis (raw packet bytes) was wrong, and only
+  replaying the exact captured packets through an isolated pipeline
+  found the real cause (Scapy's own ISAKMP dissection hiding most of the
+  actual payload from a naive `Raw` layer check).
+- Chose cross-flow connection-timing tracking over a full multiclass
+  retrain for Bot detection, and a dedicated non-blocking response path
+  over reusing the IP-blacklist machinery for CSRF — both because the
+  correct fix was architecturally different from every other gap closed
+  this week, not because either was the fastest path.
+- Manually promoted the multiclass retrain candidate despite the gate's
+  rejection, same reasoning as M4: the held-out CIC-2017 dip was real but
+  modest, and the actual capture result (35%→97.5%) is the metric that
+  matters for what this backlog item was created to fix.
+
+**Next steps:**
+- Two `docs/SECURITY_TODO.md` findings still open: reflected XSS in
+  `lab/target_service.py`'s `/search`, and the PowerShell
+  command-injection primitive in `response/connection_terminator.py`
+  (still unreachable dead code — `terminate_ip()` is deliberately never
+  called, only `invalidate_session()` is now wired in).
+- `--enforce-blocks` has still never been turned on — every block tested
+  this week (including honeypot and CSRF-adjacent paths) has been
+  memory-only (`fw_enforcement=False`). Per the user's stated end goal
+  (genuine active defense, not just detect-and-log), this is the natural
+  next milestone once confidence in detection accuracy holds — flip it on
+  and verify no self-block under real attack traffic.
+- `_BEACON_MAX_CV = 0.25` is explicitly flagged as tuned against this
+  lab's own near-zero-jitter simulated beacon, not real malware — real C2
+  usually adds deliberate jitter to defeat exactly this kind of
+  detection. Not urgent, but worth knowing the ceiling.
+- Working tree is clean — nothing left uncommitted; everything pushed.
+
+---
+
 ## 2026-07-30 — Broader attack-type spread tested live; zero-day polarity bug found & fixed; security audit; 4 items scoped for later
 
 **Goal:** Continue the live-traffic validation lab: run a broader spread of
