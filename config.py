@@ -263,6 +263,7 @@ RESPONSE_MATRIX: dict[str, list[str]] = {
     "Heartbleed":   ["block_tls", "alert_critical", "patch_notify"],
     "ZeroDay":      ["quarantine", "alert_critical", "capture_all", "retrain"],
     "APT":          ["isolate_full", "alert_critical", "forensics_mode"],
+    "Honeypot":     ["ip_block", "alert_critical", "capture_all"],
 }
 
 # ---------------------------------------------------------------------------
@@ -270,7 +271,7 @@ RESPONSE_MATRIX: dict[str, list[str]] = {
 # ---------------------------------------------------------------------------
 
 SEVERITY_LEVELS: dict[str, list[str]] = {
-    "CRITICAL": ["Infiltration", "ZeroDay", "Heartbleed", "APT"],
+    "CRITICAL": ["Infiltration", "ZeroDay", "Heartbleed", "APT", "Honeypot"],
     "HIGH":     ["DDoS", "DoS", "Bot", "Ransomware", "CommandInject", "PathTraversal"],
     "MEDIUM":   ["BruteForce", "SQLInjection", "XSS"],
     "LOW":      ["PortScan", "Phishing"],

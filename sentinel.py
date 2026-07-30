@@ -90,6 +90,7 @@ from detection.layer2_signatures import SignatureDetector
 from detection.layer3_anomaly import AnomalyDetector
 
 # Intelligence
+from intelligence.honeypot import HoneypotMonitor
 from intelligence.ip_reputation import IPReputationScorer
 from intelligence.threat_feeds import ThreatFeedAggregator
 
@@ -723,6 +724,57 @@ class SentinelIPS:
             pass
 
     # ------------------------------------------------------------------
+    # Honeypot hits
+    # ------------------------------------------------------------------
+
+    def _run_honeypot_response(self, hp_event) -> None:
+        """
+        Route a confirmed-malicious honeypot hit through the same
+        intel -> attribution -> risk -> response pipeline a regular
+        ML/signature detection uses, so it gets full geo/MITRE/threat-actor
+        enrichment and shows up in the dashboard/alerts/forensics
+        consistently instead of a thinner parallel path. HoneypotMonitor
+        itself already logs, writes PCAP, builds the attacker profile, and
+        appends to the text blacklist (any connection to a decoy service is
+        100% confirmed malicious by design -- confidence fixed at 1.0, no
+        threshold needed); this wires in the real IPBlacklister.block()
+        (OS firewall + in-memory, not just the text file) and dashboard/
+        alert integration only SentinelIPS can provide.
+        """
+        event = {
+            "attack_type": "Honeypot",
+            "src_ip":      hp_event.src_ip,
+            "dst_ip":      "0.0.0.0",
+            "src_port":    0,
+            "dst_port":    hp_event.dst_port,
+            "confidence":  1.0,
+            "anomaly_score": 0.0,
+            "severity":    self._severity_for("Honeypot"),
+            "timestamp":   time.time(),
+            "flow_bytes":  0.0,
+        }
+        self._n_attacks += 1
+        event = self._run_intel(event)
+        event = self._run_attribution(event)
+        event = self._run_risk(event)
+        self._run_response(event)
+
+        logger.info(
+            "DETECTION src=%s dst_port=%d attack=%s confidence=%.2f "
+            "severity=%s mitre=%s/%s action=%s (honeypot service=%s)",
+            event["src_ip"], event["dst_port"], event["attack_type"],
+            event["confidence"], event["severity"],
+            event.get("mitre_technique", "T0000"),
+            event.get("mitre_tactic", "Unknown"), event["action"],
+            hp_event.service_name,
+        )
+
+        self._pkt_logger.log_event(event)
+        self._events_buffer.append(event)
+        self._monitor.push_event(event)
+        self._amap.ingest(event)
+
+    # ------------------------------------------------------------------
     # SHAP narration (sampled)
     # ------------------------------------------------------------------
 
@@ -931,6 +983,20 @@ def _run_live(args) -> None:
     except Exception as exc:
         logger.warning("Packet logger capture failed: %s", exc)
 
+    # Honeypot listeners bind real sockets, so they only start here (live
+    # mode), not in SentinelIPS.__init__ -- instantiating them on every
+    # SentinelIPS() construction (simulate mode, verify scripts, etc.)
+    # would bind ports unconditionally and break anything already using
+    # them. intelligence/honeypot.py was fully implemented but never
+    # started anywhere in this file until now.
+    honeypot = HoneypotMonitor(on_hit=ips._run_honeypot_response)
+    try:
+        honeypot.start()
+        logger.info("Honeypot listeners started (%d decoy services)",
+                    len(honeypot._services))
+    except Exception as exc:
+        logger.warning("Honeypot start failed: %s", exc)
+
     logger.info("Live mode active — press Ctrl+C to stop")
     try:
         while True:
@@ -961,6 +1027,7 @@ def _run_live(args) -> None:
             del final_df
             gc.collect()
         flow_sniffer.stop()
+        honeypot.stop()
         ips.summary()
         ips.shutdown()
 
