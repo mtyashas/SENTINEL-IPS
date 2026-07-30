@@ -10,6 +10,127 @@ for the full protocol.
 
 ---
 
+## 2026-07-30 — Broader attack-type spread tested live; zero-day polarity bug found & fixed; security audit; 4 items scoped for later
+
+**Goal:** Continue the live-traffic validation lab: run a broader spread of
+attack types than M4/M5 covered (PortScan, CommandInject, PathTraversal,
+SQLInjection, Bot, zero-day), check overall coverage against CLAUDE.md's
+full attack list, and run a security review of the codebase itself.
+
+**Changes:**
+- Both lab VMs (`kali-linux-2026.1-virtualbox-amd64`, `ubuntu-benign`)
+  started headless via `VBoxManage`, host-only network confirmed reachable,
+  Npcap interface resolved (`Ethernet 2`).
+- Live-tested PortScan, CommandInject, PathTraversal, SQLInjection against
+  `lab/target_service.py`. CommandInject/PathTraversal correctly named via
+  Layer 2 signatures (HIGH severity) and **genuinely triggered
+  `IPBlacklister.block()`** — first real end-to-end proof the response
+  layer fires correctly when an attack resolves to a real name. PortScan
+  detected (binary model, conf 0.56-0.99 on all 1000 ports) but still logs
+  generic `ATTACK` — confirmed root cause with fresh evidence:
+  `detection/layer1_ml.py:232-238`, multiclass top-class resolves to
+  BENIGN (idx 0) on live traffic, deliberately falls back rather than emit
+  a contradictory label. SQLInjection's first attempt failed client-side
+  (curl rejected the unencoded `'`+space payload as a malformed URL, never
+  reached the target — not a SENTINEL bug); fixed with
+  `curl -G --data-urlencode`, retried successfully, detected correctly at
+  MEDIUM severity per `SEVERITY_LEVELS`.
+- Simulated Bot/C2 beaconing (30x `curl` at a 10s interval). Produced
+  **zero detections at all** — different failure mode than PortScan (not
+  mislabeled, never flagged). Root cause: a lone periodic GET has no
+  burst/shape signal to distinguish it from ordinary browsing at the
+  single-flow-feature level; real beacon detection needs cross-flow
+  temporal correlation (inter-arrival regularity per source→destination
+  over time), which none of Layers 1-3 implement. Caveated: the curl-loop
+  proxy is a weak stand-in for real Ares-botnet traffic, so this is
+  suggestive, not conclusive.
+- Discovered `intelligence/honeypot.py`'s `HoneypotMonitor` (fully
+  implemented — fake SSH/FTP/admin/DB/API listeners, PCAP capture,
+  auto-blacklist, attacker profiling) is **never instantiated or started
+  anywhere in `sentinel.py`** — same class of gap Layer 2 had before the
+  2026-07-28 fix. Blocks FTP/SSH-brute-force and API-abuse testing, which
+  are cleanest validated via the honeypot's guaranteed-malicious hits.
+- Ran a full-codebase security audit (working tree was clean, so not a
+  diff review — scanned response actions, threat-intel HTTP calls, the
+  honeypot listener, the dashboard, and the lab's Flask fixture directly).
+  Two real findings, documented in new `docs/SECURITY_TODO.md`: (1)
+  reflected XSS in `lab/target_service.py:52` (`/search` echoes `q`
+  unescaped into the HTML response); (2) a PowerShell command-injection
+  primitive in `response/connection_terminator.py:121-126` (`ip`
+  interpolated unescaped into a `-Command` string) — currently unreachable
+  dead code (`terminate_ip()` is never called live, and every `ip` today
+  comes from Scapy's parsed IP header, which can't contain a quote).
+  Neither fixed yet.
+- Investigated WebShell/CSRF as candidate attack types to test — verified
+  via grep that **neither has any detector at all** anywhere in `config.py`
+  or `detection/layer2_signatures.py`. CSRF specifically can't be caught at
+  the network/flow level (it's a missing-app-side-token problem, not a
+  payload signature) and, more importantly, **can't reuse the existing
+  IP-blacklist response model at all** — a CSRF request arrives from the
+  victim's own browser, so blocking the source IP would block the victim,
+  not the attacker. Needs its own reject-the-request/invalidate-session
+  response path whenever it's built.
+- Attempting a zero-day test (`nmap -sU` to 3 unusual ports) surfaced a
+  bug that had *already been found and fixed earlier tonight in an
+  interrupted session*, sitting uncommitted: `sentinel.py`'s
+  `_build_event()` promoted a flow to `ZeroDay` on `anomaly_score >= 0.2`,
+  but `IsolationForest.decision_function` returns *more negative* for
+  *more* anomalous — the check had the polarity backwards and could never
+  fire. Same backwards direction gated `adaptive/zero_day_miner.py`'s
+  candidate filter. Both fixed (keyed off `anomaly_detected` instead;
+  filter flipped to `<= -_MIN_ANOMALY_SCORE`), with a new runnable
+  self-check (`lab/verify_zeroday_polarity.py`). However: the fix was
+  written to disk at 01:03, but the `sentinel.py live` process running
+  tonight started at 00:11 — Python doesn't hot-reload, so the live
+  process was still running the old buggy code for the rest of the
+  session. The zero-day fix itself was never actually verified against
+  live traffic tonight. Separately, and independent of the polarity bug:
+  the UDP scan produced **zero detections** even from Layer 3's
+  anomaly-promotion path (which doesn't depend on the buggy labeling
+  code) — a real miss on 3 lone UDP probes, though too small a sample to
+  be conclusive on its own.
+- 3 commits made and pushed to `origin` (`github.com/mtyashas/SENTINEL-IPS`):
+  the zero-day polarity fix + verify script, tonight's threat-intel
+  artifacts, and the security findings doc.
+
+**Decisions:**
+- Kept the lab in detect-and-log-only mode all session
+  (`fw_enforcement=False`) — deliberate. User's stated end goal is genuine
+  active defense (not just detect-and-log), and agreed priority order is:
+  validate detection coverage first → fix the multiclass gap → then flip
+  on `--enforce-blocks` and verify no self-block, rather than enabling
+  real enforcement on a still-shaky signal.
+- Did not chase the multiclass retrain, WebShell/CSRF, or honeypot wiring
+  ad-hoc mid-session even though all three were directly relevant to what
+  was being tested — each is real, well-scoped feature work (comparable
+  effort to M4's retrain or the Layer 2 wiring session), not a quick
+  patch, so each was documented as its own separate backlog item instead
+  of a rushed fix.
+- Did not restart the live capture process to pick up the zero-day
+  polarity fix mid-session — user chose to stop for the night instead;
+  the fix is committed but functionally untested against live traffic.
+
+**Next steps:**
+- Restart `sentinel.py live` next session to actually load the zero-day
+  polarity fix, then re-verify zero-day/UDP-scan detection properly.
+- Investigate why the UDP zero-day scan got zero detections independent
+  of the polarity bug — Layer 3's anomaly-promotion path didn't fire on
+  3 lone UDP probes; unclear yet whether that's a baseline/feature-space
+  issue or just too small a sample.
+- Four separate backlog items, all scoped but not started: (1) multiclass
+  retrain — fixes PortScan mislabeling and unblocks blacklisting for any
+  attack that currently can't get a specific name; (2) WebShell + CSRF
+  detection — new feature work, CSRF needs its own non-IP-block response
+  path; (3) Bot/C2 cross-flow temporal detection — needs a new stateful
+  feature in `core/flow_collector.py`, architecturally distinct from a
+  retrain; (4) wire `HoneypotMonitor` into `sentinel.py live` — same fix
+  shape as the 2026-07-28 Layer 2 wiring, unblocks FTP/SSH-brute-force and
+  API-abuse testing.
+- Two security findings in `docs/SECURITY_TODO.md` still open, not fixed.
+- Working tree is clean — nothing left uncommitted; everything pushed.
+
+---
+
 ## 2026-07-28 — M5 gaps fixed and verified; Layer 2 wired in for the first time ever
 
 **Goal:** Fix the two M5 gaps queued from 2026-07-27 (unreachable
