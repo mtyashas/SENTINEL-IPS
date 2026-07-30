@@ -8,40 +8,50 @@ Purpose: Adaptive-retraining pass for the multiclass model, mirroring
          multiclass"). Without a real attack-type label, severity never
          escalates past MEDIUM (SEVERITY_LEVELS matches on exact attack-type
          name) and threat_intel/ip_blacklist.txt auto-blacklisting never
-         fires — this is a dead code path until attack_class resolves to
-         real names on live traffic.
+         fires for anything the multiclass model can't name -- confirmed
+         live 2026-07-29/30: nmap -sS -p1-1000 was correctly detected as an
+         attack every time but never labelled PortScan, always the generic
+         ATTACK fallback (detection/layer1_ml.py:232-238).
 
-         Ground truth here is inferred from the M5 lab capture rather than
-         known per-flow: src_ip alone identifies attacker vs benign (as in
-         M4), but not *which* attack type. Distinguished by flow shape
-         instead, using only already-computed flow features (no payload
-         inspection):
-           - src_ip == BENIGN_IP                                 -> BENIGN
-           - src_ip == ATTACKER_IP, <=2 packets, no PSH data      -> EXCLUDED
-             (hping3 --flood -S produces bare-SYN, no-payload flows --
-             the *identical* per-flow shape as gen_benign_traffic.sh's
-             deliberate closed-port probes to :8081. Genuinely
-             indistinguishable at the single-flow feature level with no
-             cross-flow rate signal in this schema; an earlier version of
-             this script force-labelled these DoS and it taught the model
-             to also flag ~28% of real benign traffic as DoS. Excluding
-             them is honest about the limitation instead of shipping a
-             confident false positive. DoS/DDoS detection for this exact
-             attack style remains an open gap -- would need a rate/volume
-             feature FlowCollector doesn't currently compute.)
+         Ground truth: src_ip identifies attacker vs benign as in M4, but
+         not *which* attack type -- distinguished by flow shape instead
+         (revised 2026-07-31, see below), using only already-computed flow
+         features (no payload inspection):
+           - src_ip == BENIGN_IP                                  -> BENIGN
+           - src_ip == ATTACKER_IP, <=3 packets, no PSH data       -> PortScan
+             (nmap -sS's own shape regardless of port state: SYN only
+             if filtered, SYN+RST if closed, SYN+SYN-ACK+RST if open --
+             never more than 3 packets, never a payload)
            - src_ip == ATTACKER_IP, otherwise (real HTTP request/
-             response exchanged)                                 -> BruteForce
-             (hydra's many login POSTs dominate this bucket by volume;
-             the one SQLi-shaped curl request gets folded in too --
-             a known, deliberate simplification, not a labeling bug:
-             BruteForce and the true WebAttack class are adjacent-severity
-             MEDIUM anyway, so this doesn't affect the severity-escalation
-             goal this pass targets.)
+             response exchanged, PSH data present)                -> WebAttack
+             (the CommandInject/PathTraversal/SQLInjection curls in this
+             capture -- WebAttack is the only class available for any of
+             these three: core/preprocessing.py collapses "Web Attack -
+             Brute Force/XSS/Sql Injection" into one WebAttack label in the
+             original CIC-2017 data, there's no separate class to target.
+             This doesn't matter operationally: Layer 2 signatures already
+             label these correctly and reliably by payload match,
+             independent of and prioritised over whatever the multiclass
+             model predicts -- see sentinel.py _build_event()'s sig_type
+             check-first branch. This pass only needs to fix cases the
+             multiclass model is the *only* signal for, which is PortScan.)
 
-Inputs:  pcap/<M5 capture>.pcap; models/benchmarkids_multiclass.pkl;
-         datasets/CIC-IDS-2017/**/*.csv (sampled).
+         An M4-style capture is used here rather than M5's original mixed
+         hping3-flood/hydra/curl one specifically because it contains no
+         DoS-shaped flood traffic -- the earlier version of this script
+         (2026-07-27) had to *exclude* short/no-payload flows entirely
+         because bare-SYN hping3 flood fragments and gen_benign_traffic.sh's
+         deliberate closed-port :8081 probes are genuinely indistinguishable
+         at the single-flow-feature level (no cross-flow rate signal exists
+         in this schema -- still an open, separate gap). This capture's only
+         short/no-payload attacker traffic is the nmap scan itself, so no
+         such ambiguity applies here and nothing needs to be excluded.
+
+Inputs:  pcap/<2026-07-29 four-attack capture>.pcap;
+         models/benchmarkids_multiclass.pkl; datasets/CIC-IDS-2017/**/*.csv
+         (sampled).
 Outputs: Retrained multiclass model in models/ if macro recall improves
-         (old model backed up to .bak); before/after accuracy on the M5
+         (old model backed up to .bak); before/after accuracy on the
          capture printed to stdout.
 
 Usage:
@@ -81,37 +91,30 @@ logger = logging.getLogger("m5_multiclass_retrain")
 
 ATTACKER_IP  = "192.168.56.10"
 BENIGN_IP    = "192.168.56.20"
-DEFAULT_PCAP = _ROOT / "pcap" / "sentinel_20260727_130028_613ecac5.pcap"
+DEFAULT_PCAP = _ROOT / "pcap" / "sentinel_20260729_184145_7f742e9a.pcap"
 BINARY_MODEL     = MODEL_DIR / "benchmarkids_binary.pkl"
 MULTICLASS_MODEL = MODEL_DIR / "benchmarkids_multiclass.pkl"
 FEAT_COLS        = MODEL_DIR / "benchmarkids_binary_feature_cols.pkl"
 TRAIN_CACHE      = MODEL_DIR / "train_cache_multiclass.parquet"
 MISTAKE_BUFFER   = MODEL_DIR / "mistakes_buffer_multiclass.parquet"
 
-_BENIGN_IDX = ATTACK_CLASSES.index("BENIGN")
-_BF_IDX     = ATTACK_CLASSES.index("BruteForce")
+_BENIGN_IDX    = ATTACK_CLASSES.index("BENIGN")
+_PORTSCAN_IDX  = ATTACK_CLASSES.index("PortScan")
+_WEBATTACK_IDX = ATTACK_CLASSES.index("WebAttack")
 
 
 def label_flows(flows: pd.DataFrame) -> pd.DataFrame:
-    """Ground truth by src_ip + flow shape (see module docstring).
-
-    Bare "<=2 packets, no payload" flows are EXCLUDED entirely rather than
-    labelled DoS: gen_benign_traffic.sh's deliberate closed-port probes
-    (curl --max-time 1 to :8081) produce the identical per-flow shape as a
-    bare-SYN hping3 flood fragment -- genuinely indistinguishable at the
-    single-flow feature level (no cross-flow rate signal exists in this
-    schema). Training the model to call that shape DoS just teaches it to
-    also flag the benign probes; better to admit the ambiguity than ship a
-    confident false positive on real benign traffic.
-    """
+    """Ground truth by src_ip + flow shape (see module docstring). No
+    exclusion needed for this capture -- see docstring for why."""
     labelled = flows[flows["src_ip"].isin([ATTACKER_IP, BENIGN_IP])].copy()
 
-    total_pkts = labelled["total_fwd_packets"] + labelled["total_backward_packets"]
-    is_ambiguous_shape = (total_pkts <= 2) & (labelled["psh_flag_count"] == 0)
-    labelled = labelled[~is_ambiguous_shape].copy()
+    total_pkts   = labelled["total_fwd_packets"] + labelled["total_backward_packets"]
+    is_scan_shape = (total_pkts <= 3) & (labelled["psh_flag_count"] == 0)
+    is_attacker   = labelled["src_ip"] == ATTACKER_IP
 
-    truth = np.full(len(labelled), _BF_IDX, dtype=int)
-    truth[labelled["src_ip"] == BENIGN_IP] = _BENIGN_IDX
+    truth = np.full(len(labelled), _BENIGN_IDX, dtype=int)
+    truth[is_attacker & is_scan_shape]  = _PORTSCAN_IDX
+    truth[is_attacker & ~is_scan_shape] = _WEBATTACK_IDX
     labelled["__truth__"] = truth
     return labelled
 
@@ -145,7 +148,7 @@ def find_mistakes(flows: pd.DataFrame, collector: MistakeCollector, layer1: MLDe
             n_mistakes += 1
 
     accuracy = (pred_raw == truth).sum() / len(truth)
-    logger.info("Production multiclass model on M5 capture: %.4f accuracy, %d/%d mistakes",
+    logger.info("Production multiclass model on capture: %.4f accuracy, %d/%d mistakes",
                 accuracy, n_mistakes, len(truth))
     return n_mistakes, accuracy, X
 
@@ -172,7 +175,7 @@ def main():
         return
 
     mistake_collector = MistakeCollector(buffer_path=MISTAKE_BUFFER)
-    n_mistakes, acc_before, X_m5 = find_mistakes(flows, mistake_collector, layer1)
+    n_mistakes, acc_before, X_capture = find_mistakes(flows, mistake_collector, layer1)
     if n_mistakes == 0:
         logger.info("No mistakes found — production model already correct on this capture.")
         return
@@ -192,9 +195,9 @@ def main():
         X17, y17, test_size=0.2, random_state=42, stratify=y17,
     )
 
-    y_m5 = pd.Series(flows["__truth__"].values, index=X_m5.index, name=MULTICLASS_LABEL_COL)
-    X_cache = pd.concat([X17_tr, X_m5], ignore_index=True)
-    y_cache = pd.concat([y17_tr, y_m5], ignore_index=True)
+    y_capture = pd.Series(flows["__truth__"].values, index=X_capture.index, name=MULTICLASS_LABEL_COL)
+    X_cache = pd.concat([X17_tr, X_capture], ignore_index=True)
+    y_cache = pd.concat([y17_tr, y_capture], ignore_index=True)
     trainer.cache_training_data(X_cache, y_cache)
 
     result = trainer.retrain(X17_te, y17_te)
@@ -209,11 +212,11 @@ def main():
     layer1_after = MLDetectionLayer(model_path=str(BINARY_MODEL), feat_cols_path=str(FEAT_COLS))
     acc_after = eval_on_capture(flows, layer1_after)
     logger.info(
-        "M5 capture accuracy: before=%.4f after=%.4f (%d flows)",
+        "Capture accuracy: before=%.4f after=%.4f (%d flows)",
         acc_before, acc_after, len(flows),
     )
     verdict = "PASS" if acc_after > acc_before else "NO IMPROVEMENT"
-    logger.info("M5 multiclass adaptive-retrain check: %s", verdict)
+    logger.info("Multiclass adaptive-retrain check: %s", verdict)
 
 
 if __name__ == "__main__":
