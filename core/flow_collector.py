@@ -42,6 +42,7 @@ Usage:
 import logging
 import threading
 import time
+from collections import defaultdict, deque
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -93,6 +94,25 @@ _SYN_REUSE_IDLE_S = 3.0
 # standard. Only the first data-carrying packet's payload is kept per flow;
 # injection/XSS/traversal patterns appear at the start of a request.
 _PAYLOAD_CAP_BYTES = 2048
+
+# Cross-flow beacon (Bot/C2) detection tuning. A single flow's own features
+# carry no information about "same source hit the same destination on a
+# regular interval, repeatedly" -- confirmed live 2026-07-30: a simulated
+# C2 beacon (one GET every 10s) produced zero detections at any confidence,
+# because one isolated request looks exactly like ordinary browsing. This
+# tracks connection *start times* per (src_ip, dst_ip) pair across flows to
+# give sentinel.py's _run_beacon() something to check.
+#
+# _BEACON_MAX_CV is a naive heuristic with a known ceiling: real C2 malware
+# usually adds deliberate jitter specifically to defeat interval-regularity
+# detection like this, and 0.25 was picked by eye against this lab's own
+# simulated beacon (near-zero jitter, sleep 10s exactly) rather than
+# real-world malware samples. This catches unsophisticated/naive beaconing,
+# not evasive C2 -- upgrade path is a proper time-series/frequency-domain
+# analysis if that's ever needed.
+_BEACON_HISTORY_LEN     = 20     # connections tracked per (src,dst) pair
+_BEACON_MIN_CONNECTIONS = 5      # minimum history before scoring at all
+_BEACON_MAX_CV          = 0.25   # interval coefficient-of-variation ceiling
 
 FlowKey = Tuple[str, int, str, int, int]   # (ip_a, port_a, ip_b, port_b, proto)
 
@@ -528,6 +548,12 @@ class FlowCollector:
         self._completed: List[dict] = []
         self._lock = threading.Lock()
 
+        # (src_ip, dst_ip) -> deque of connection start timestamps, for
+        # cross-flow beacon detection (see _BEACON_* constants / beacon_score()).
+        self._conn_history: Dict[Tuple[str, str], deque] = defaultdict(
+            lambda: deque(maxlen=_BEACON_HISTORY_LEN)
+        )
+
         self._n_packets_seen     = 0
         self._n_flows_completed  = 0
         self._n_flows_evicted    = 0
@@ -581,6 +607,7 @@ class FlowCollector:
                 state = _FlowState(pi)
                 self._flows[key] = state
                 self._creation_order.append(key)
+                self._conn_history[(pi.src_ip, pi.dst_ip)].append(pi.ts)
             else:
                 state.ingest(pi)
 
@@ -651,3 +678,32 @@ class FlowCollector:
             "flows_completed": self._n_flows_completed,
             "flows_evicted":   self._n_flows_evicted,
         }
+
+    def beacon_score(self, src_ip: str, dst_ip: str) -> dict:
+        """
+        Cross-flow connection-regularity signal for one (src_ip, dst_ip)
+        pair, for Bot/C2 beacon detection (see _BEACON_* constants above).
+
+        Inputs:  src_ip, dst_ip — the pair to score
+        Outputs: dict with conn_count, is_beacon (bool), interval_cv
+                 (coefficient of variation of inter-connection intervals,
+                 None if not enough history), mean_interval_s
+        """
+        with self._lock:
+            history = list(self._conn_history.get((src_ip, dst_ip), ()))
+
+        if len(history) < _BEACON_MIN_CONNECTIONS:
+            return {"conn_count": len(history), "is_beacon": False,
+                    "interval_cv": None, "mean_interval_s": None}
+
+        intervals = [b - a for a, b in zip(history, history[1:])]
+        mean_interval = sum(intervals) / len(intervals)
+        if mean_interval <= 0:
+            return {"conn_count": len(history), "is_beacon": False,
+                    "interval_cv": None, "mean_interval_s": mean_interval}
+
+        variance = sum((x - mean_interval) ** 2 for x in intervals) / len(intervals)
+        cv = (variance ** 0.5) / mean_interval
+        is_beacon = cv <= _BEACON_MAX_CV
+        return {"conn_count": len(history), "is_beacon": is_beacon,
+                "interval_cv": round(cv, 4), "mean_interval_s": round(mean_interval, 2)}

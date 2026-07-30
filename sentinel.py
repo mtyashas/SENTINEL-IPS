@@ -299,6 +299,9 @@ class SentinelIPS:
         # --- Layer 2: signature matching on captured payload samples ---
         chunk = self._run_signatures(chunk)
 
+        # --- Beacon (Bot/C2) detection on cross-flow connection regularity ---
+        chunk = self._run_beacon(chunk)
+
         # --- Layer 3: anomaly detection (fit on first non-trivial chunk) ---
         chunk = self._run_anomaly(chunk)
 
@@ -497,6 +500,58 @@ class SentinelIPS:
                 chunk.loc[detected_mask, "confidence"] = 0.90
         except Exception as exc:
             logger.debug("Layer2 signature check error: %s", exc)
+        return chunk
+
+    # ------------------------------------------------------------------
+    # Beacon (Bot/C2) detection
+    # ------------------------------------------------------------------
+
+    def _run_beacon(self, chunk: pd.DataFrame) -> pd.DataFrame:
+        """
+        Rule-based cross-flow beacon detection. Layer 1's per-flow ML
+        features have no visibility into "same source hit the same
+        destination on a regular interval, repeatedly" -- confirmed live
+        2026-07-30: a simulated C2 beacon (one GET every 10s) produced zero
+        detections at any confidence, because a single isolated request
+        looks exactly like ordinary browsing.
+
+        "beacon_detected" is populated by _run_live()'s main loop from
+        core.flow_collector.FlowCollector.beacon_score() (needs
+        cross-flow history the per-chunk DataFrame alone doesn't have) --
+        this is a no-op in simulate mode, where the column is simply
+        absent, same defensive pattern as everywhere else in this pipeline
+        that depends on a live-only column.
+
+        Lower confidence (0.75) than an exact signature match (0.90):
+        this is a statistical inference over connection timing, not an
+        exact pattern hit.
+        """
+        if "beacon_detected" not in chunk.columns:
+            return chunk
+        beacon_mask = chunk["beacon_detected"].fillna(False).astype(bool)
+        if not beacon_mask.any():
+            return chunk
+
+        chunk = chunk.copy()
+        if "sig_attack_type" not in chunk.columns:
+            chunk["sig_attack_type"] = None
+        # Don't override a more specific payload-signature match on the
+        # same flow (e.g. it also happened to carry a SQLi payload) --
+        # beacon is a lower-priority fallback label, same precedence Layer
+        # 2 signatures already use relative to the ML-derived label.
+        newly_labelled = chunk["sig_attack_type"].isna() & beacon_mask
+        if not newly_labelled.any():
+            return chunk
+        chunk.loc[newly_labelled, "sig_attack_type"] = "Bot"
+        if "pred_binary" in chunk.columns:
+            chunk.loc[newly_labelled, "pred_binary"] = 1
+        else:
+            chunk["pred_binary"] = newly_labelled.astype(int)
+        if "confidence" in chunk.columns:
+            chunk.loc[newly_labelled, "confidence"] = \
+                chunk.loc[newly_labelled, "confidence"].clip(lower=0.75)
+        else:
+            chunk.loc[newly_labelled, "confidence"] = 0.75
         return chunk
 
     # ------------------------------------------------------------------
@@ -1047,6 +1102,24 @@ def _run_live(args) -> None:
     except Exception as exc:
         logger.warning("Honeypot start failed: %s", exc)
 
+    def _add_beacon_column(flow_df: pd.DataFrame) -> pd.DataFrame:
+        """Cross-flow beacon score needs FlowCollector's connection
+        history, which only exists here (not inside
+        SentinelIPS.process_chunk(), which only ever sees one chunk at a
+        time) -- queried once per unique (src,dst) pair in this chunk."""
+        if "src_ip" not in flow_df.columns or "dst_ip" not in flow_df.columns:
+            return flow_df
+        pairs = flow_df[["src_ip", "dst_ip"]].drop_duplicates()
+        beacon_map = {
+            (s, d): collector.beacon_score(s, d)["is_beacon"]
+            for s, d in pairs.itertuples(index=False)
+        }
+        flow_df["beacon_detected"] = [
+            beacon_map.get((s, d), False)
+            for s, d in zip(flow_df["src_ip"], flow_df["dst_ip"])
+        ]
+        return flow_df
+
     logger.info("Live mode active — press Ctrl+C to stop")
     try:
         while True:
@@ -1058,6 +1131,7 @@ def _run_live(args) -> None:
             if frames:
                 flow_df = pd.concat(frames, ignore_index=True)
                 flow_df = eng.transform(flow_df)
+                flow_df = _add_beacon_column(flow_df)
                 ips.process_chunk(flow_df)
                 del flow_df
                 gc.collect()
@@ -1073,7 +1147,8 @@ def _run_live(args) -> None:
         logger.info("Keyboard interrupt — flushing remaining flows...")
         final_df = collector.flush_all()
         if not final_df.empty:
-            ips.process_chunk(eng.transform(final_df))
+            final_df = _add_beacon_column(eng.transform(final_df))
+            ips.process_chunk(final_df)
             del final_df
             gc.collect()
         flow_sniffer.stop()
