@@ -101,6 +101,7 @@ from attribution.threat_profiler import ThreatActorProfiler
 
 # Response
 from response.alert_dispatcher import AlertDispatcher
+from response.connection_terminator import ConnectionTerminator
 from response.ip_blacklister import IPBlacklister
 from response.rate_limiter import RateLimiter
 
@@ -229,6 +230,10 @@ class SentinelIPS:
         self._blacklist  = IPBlacklister(enforce_os_firewall=enforce_blocks)
         self._rate       = RateLimiter()
         self._dispatcher = AlertDispatcher()
+        # Only invalidate_session() is used (pure in-memory bookkeeping, no
+        # OS calls) -- terminate_ip() is intentionally never called from
+        # here, see docs/SECURITY_TODO.md's PowerShell-injection finding.
+        self._terminator = ConnectionTerminator(enforce_network=enforce_blocks)
         logger.info("Response layer ready")
 
         # --- Adaptive ---
@@ -421,7 +426,8 @@ class SentinelIPS:
             return chunk
         try:
             has_dst_ip = "dst_ip" in chunk.columns
-            sig_types = pd.Series(None, index=chunk.index, dtype=object)
+            sig_types   = pd.Series(None, index=chunk.index, dtype=object)
+            csrf_tokens = pd.Series(None, index=chunk.index, dtype=object)
             for idx, payload in chunk["payload_sample"].items():
                 if not payload:
                     continue
@@ -436,6 +442,17 @@ class SentinelIPS:
                     # 0x7C byte, matching COMMAND_INJECTION_PATTERNS' "[|`]"
                     # and getting genuinely blocked as CommandInject.
                     continue
+
+                # CSRF checked first and separately: it's a structural check
+                # (method/path/headers) rather than a payload-content
+                # signature, so it doesn't fit the check_payload/check_url
+                # fallback chain below.
+                csrf_hit = self._sig.check_csrf(payload)
+                if csrf_hit["detected"]:
+                    sig_types.at[idx]   = csrf_hit["attack_type"]
+                    csrf_tokens.at[idx] = csrf_hit.get("session_token", "")
+                    continue
+
                 hit = self._sig.check_payload(payload)
                 if not hit["detected"]:
                     # check_payload() only checks injection patterns; the
@@ -467,7 +484,8 @@ class SentinelIPS:
                 return chunk
 
             chunk = chunk.copy()
-            chunk["sig_attack_type"] = sig_types
+            chunk["sig_attack_type"]      = sig_types
+            chunk["csrf_session_token"]   = csrf_tokens
             if "pred_binary" in chunk.columns:
                 chunk.loc[detected_mask, "pred_binary"] = 1
             else:
@@ -558,7 +576,7 @@ class SentinelIPS:
                     else:
                         attack_type = "Unknown"
 
-            return {
+            event = {
                 "attack_type": attack_type,
                 "src_ip":      str(row.get("src_ip", row.get("source_ip", "0.0.0.0"))),
                 "dst_ip":      str(row.get("dst_ip", row.get("destination_ip", "0.0.0.0"))),
@@ -570,6 +588,12 @@ class SentinelIPS:
                 "timestamp":   time.time(),
                 "flow_bytes":  float(row.get("flow_bytes_per_s", 0)),
             }
+            if attack_type == "CSRF":
+                # The response layer needs this to invalidate the forged
+                # session instead of blocking src_ip (see _run_response) --
+                # src_ip here is the victim's browser, not the attacker's.
+                event["session_token"] = str(row.get("csrf_session_token", ""))
+            return event
         except Exception as exc:
             logger.debug("Event build error: %s", exc)
             return None
@@ -684,6 +708,32 @@ class SentinelIPS:
                 logger.debug("Rate-limited %s (%s)", src_ip, attack)
         except Exception:
             pass
+
+        if attack == "CSRF":
+            # The request that reaches us in a CSRF attack came from the
+            # *victim's own browser*, not the attacker's machine -- every
+            # other branch below blocks src_ip, which here would block the
+            # victim. The correct countermeasure is session-level: kill the
+            # forged request's session token so it (and any further replay)
+            # stops being accepted, then alert. No IP block, ever, for this
+            # attack type.
+            token = event.get("session_token", "")
+            if token:
+                try:
+                    self._terminator.invalidate_session(token)
+                except Exception as exc:
+                    logger.debug("CSRF session invalidation failed: %s", exc)
+            try:
+                self._dispatcher.dispatch({
+                    "attack_type": attack,
+                    "severity":    severity,
+                    "src_ip":      src_ip,
+                    "detail":      event.get("risk_explanation", ""),
+                    "confidence":  confidence,
+                })
+            except Exception:
+                pass
+            return
 
         # IP blocking for HIGH/CRITICAL
         blocked = False

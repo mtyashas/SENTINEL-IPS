@@ -242,6 +242,11 @@ MITRE_ATTACK_MAP: dict[str, dict] = {
         "technique": "T1203",
         "name":      "Exploitation for Client Execution",
     },
+    "WebShell": {
+        "tactic":    "Persistence",
+        "technique": "T1505.003",
+        "name":      "Server Software Component: Web Shell",
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -264,6 +269,12 @@ RESPONSE_MATRIX: dict[str, list[str]] = {
     "ZeroDay":      ["quarantine", "alert_critical", "capture_all", "retrain"],
     "APT":          ["isolate_full", "alert_critical", "forensics_mode"],
     "Honeypot":     ["ip_block", "alert_critical", "capture_all"],
+    "WebShell":     ["block_request", "ip_block", "quarantine_file", "alert_critical"],
+    # No ip_block_* action, deliberately -- src_ip in a CSRF request is the
+    # victim's browser, not the attacker's. sentinel.py's _run_response()
+    # CSRF branch invalidates the session instead and never reaches the
+    # generic block logic at all.
+    "CSRF":         ["invalidate_session", "alert_medium"],
 }
 
 # ---------------------------------------------------------------------------
@@ -271,9 +282,9 @@ RESPONSE_MATRIX: dict[str, list[str]] = {
 # ---------------------------------------------------------------------------
 
 SEVERITY_LEVELS: dict[str, list[str]] = {
-    "CRITICAL": ["Infiltration", "ZeroDay", "Heartbleed", "APT", "Honeypot"],
+    "CRITICAL": ["Infiltration", "ZeroDay", "Heartbleed", "APT", "Honeypot", "WebShell"],
     "HIGH":     ["DDoS", "DoS", "Bot", "Ransomware", "CommandInject", "PathTraversal"],
-    "MEDIUM":   ["BruteForce", "SQLInjection", "XSS"],
+    "MEDIUM":   ["BruteForce", "SQLInjection", "XSS", "CSRF"],
     "LOW":      ["PortScan", "Phishing"],
     "INFO":     ["Reconnaissance"],
 }

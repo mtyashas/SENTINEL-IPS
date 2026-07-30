@@ -24,7 +24,7 @@ import ipaddress
 import logging
 import re
 from typing import Dict, List, Optional
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 from config import (
     COMMAND_INJECTION_PATTERNS,
@@ -65,6 +65,20 @@ _PATH_TRAVERSAL_PATTERNS: List[str] = [
     r"[Cc]:\\[Ww]indows",
 ]
 
+_WEB_SHELL_PATTERNS: List[str] = [
+    # Detection signatures only -- regex strings matched against captured
+    # attacker payloads, never executed. PHP/ASP/JSP eval-style shells
+    # wired to a superglobal/request param is the defining web-shell trait,
+    # not just "eval(" alone (too broad, would match ordinary application
+    # code that never touches request input).
+    r"(eval|system|exec|passthru|shell_exec|assert)\s*\(\s*\$_(GET|POST|REQUEST|COOKIE)",
+    r"Runtime\.getRuntime\(\)\.exec",
+    r"System\.Diagnostics\.Process",
+    r"<%@\s*page.*Runtime",
+    # Known public web-shell filenames commonly dropped/requested verbatim
+    r"/(c99|r57|b374k|wso|webshell)\.(php|asp|aspx|jsp)",
+]
+
 _PHISHING_SUSPICIOUS_TLDS: List[str] = [
     ".tk", ".ml", ".ga", ".cf", ".xyz", ".gq", ".pw",
     ".top", ".work", ".click", ".download", ".loan",
@@ -100,6 +114,21 @@ _BRUTE_FORCE_HEADER_PATTERNS: List[str] = [
     r"Basic\s+[A-Za-z0-9+/=]{4,}",   # many distinct Basic auth attempts
 ]
 
+# CSRF only matters on endpoints that change state -- checking every GET
+# would flag normal cross-site navigation constantly. Lab-fixture-specific
+# (lab/target_service.py's /account/* routes); a real deployment would
+# configure this per its own sensitive routes.
+_CSRF_SENSITIVE_PATH_PREFIXES: List[str] = ["/account/"]
+_CSRF_STATE_CHANGING_METHODS = ("POST", "PUT", "DELETE", "PATCH")
+
+_CSRF_REQUEST_LINE_RE = re.compile(
+    r"^(POST|PUT|DELETE|PATCH)\s+(\S+)\s+HTTP/", re.MULTILINE
+)
+_CSRF_COOKIE_RE = re.compile(r"^Cookie:\s*(.+)$", re.MULTILINE | re.IGNORECASE)
+_CSRF_SESSION_COOKIE_RE = re.compile(r"\bsession=([^;\s]+)", re.IGNORECASE)
+_CSRF_HOST_RE   = re.compile(r"^Host:\s*([^\s:]+)", re.MULTILINE | re.IGNORECASE)
+_CSRF_ORIGIN_RE = re.compile(r"^(?:Origin|Referer):\s*(\S+)", re.MULTILINE | re.IGNORECASE)
+
 # ---------------------------------------------------------------------------
 # Severity lookup per attack type
 # ---------------------------------------------------------------------------
@@ -111,6 +140,8 @@ _SEVERITY: Dict[str, str] = {
     "PathTraversal":  "HIGH",
     "Phishing":       "LOW",
     "BruteForce":     "MEDIUM",
+    "WebShell":       "CRITICAL",
+    "CSRF":           "MEDIUM",
 }
 
 
@@ -174,6 +205,9 @@ class SignatureDetector:
         self._path_re: List[re.Pattern] = [
             re.compile(p, flags) for p in _PATH_TRAVERSAL_PATTERNS
         ]
+        self._shell_re: List[re.Pattern] = [
+            re.compile(p, flags) for p in _WEB_SHELL_PATTERNS
+        ]
         self._phish_homo_re: List[re.Pattern] = [
             re.compile(p, flags) for p in _PHISHING_HOMOGRAPH_PATTERNS
         ]
@@ -185,9 +219,9 @@ class SignatureDetector:
         ]
 
         logger.info(
-            "SignatureDetector initialised — SQL:%d XSS:%d CMD:%d PATH:%d",
+            "SignatureDetector initialised — SQL:%d XSS:%d CMD:%d PATH:%d SHELL:%d",
             len(self._sql_re), len(self._xss_re),
-            len(self._cmd_re), len(self._path_re),
+            len(self._cmd_re), len(self._path_re), len(self._shell_re),
         )
 
     # ------------------------------------------------------------------
@@ -233,6 +267,7 @@ class SignatureDetector:
 
         for text in (payload, decoded):
             for patterns, atype in (
+                (self._shell_re, "WebShell"),
                 (self._sql_re,  "SQLInjection"),
                 (self._xss_re,  "XSS"),
                 (self._cmd_re,  "CommandInject"),
@@ -339,6 +374,72 @@ class SignatureDetector:
 
         return _no_detection()
 
+    def check_csrf(self, raw_request: str) -> Dict:
+        """
+        Detect a forged cross-site request against a session-bearing,
+        state-changing endpoint.
+
+        Unlike every other check in this class, this isn't a payload
+        signature -- a CSRF request's *body* is completely unremarkable
+        (that's the point: it looks like an ordinary state-changing
+        request). What's wrong is structural: it carries a session cookie
+        (proving the victim's browser is authenticated) but has no
+        Referer/Origin header naming this host, or names a different one
+        entirely -- the tell that the request didn't originate from a page
+        this site served.
+
+        Only checked against _CSRF_SENSITIVE_PATH_PREFIXES (configured for
+        this lab's /account/* routes) -- checking every state-changing
+        request site-wide would need a real CSRF-token design decision
+        this project hasn't made; this targets the specific gap being
+        fixed.
+
+        Note the response implication: the request that reaches the server
+        in a CSRF attack comes from the *victim's own browser*, not the
+        attacker's machine. Blocking src_ip (every other attack type's
+        response) would block the victim, not the attacker -- callers
+        should invalidate the returned session_token instead. See
+        sentinel.py's _run_response() CSRF branch.
+
+        Inputs:  raw_request — full raw HTTP request text (payload_sample)
+        Outputs: detection dict, plus "session_token" (the "session"
+                 cookie's value, or the whole Cookie header if no cookie
+                 is specifically named "session") when detected
+        """
+        if not raw_request:
+            return _no_detection()
+
+        line_match = _CSRF_REQUEST_LINE_RE.match(raw_request)
+        if not line_match:
+            return _no_detection()
+        method, path = line_match.group(1), line_match.group(2)
+        if method not in _CSRF_STATE_CHANGING_METHODS:
+            return _no_detection()
+        if not any(path.startswith(p) for p in _CSRF_SENSITIVE_PATH_PREFIXES):
+            return _no_detection()
+
+        cookie_match = _CSRF_COOKIE_RE.search(raw_request)
+        if not cookie_match:
+            return _no_detection()   # no session to forge -- nothing at risk
+        cookie_header = cookie_match.group(1).strip()
+        session_match = _CSRF_SESSION_COOKIE_RE.search(cookie_header)
+        # Falls back to the whole Cookie header when no cookie is
+        # specifically named "session" -- still a usable opaque identifier
+        # for invalidation, just not as precise as the named-cookie case.
+        session_token = session_match.group(1) if session_match else cookie_header
+
+        host_match   = _CSRF_HOST_RE.search(raw_request)
+        host         = host_match.group(1) if host_match else ""
+        origin_match = _CSRF_ORIGIN_RE.search(raw_request)
+        if origin_match:
+            origin_host = urlparse(origin_match.group(1)).hostname or origin_match.group(1)
+            if host and origin_host == host:
+                return _no_detection()   # same-origin Referer/Origin -- legitimate
+
+        result = _detection("CSRF", f"{method} {path} (no matching Origin/Referer)")
+        result["session_token"] = session_token
+        return result
+
     def scan(self, data: str) -> List[Dict]:
         """
         Run all signature checks against a raw data string.
@@ -356,6 +457,7 @@ class SignatureDetector:
         seen_types: set = set()
 
         checks = [
+            (self._shell_re, "WebShell"),
             (self._sql_re,  "SQLInjection"),
             (self._xss_re,  "XSS"),
             (self._cmd_re,  "CommandInject"),
