@@ -110,9 +110,20 @@ _PAYLOAD_CAP_BYTES = 2048
 # real-world malware samples. This catches unsophisticated/naive beaconing,
 # not evasive C2 -- upgrade path is a proper time-series/frequency-domain
 # analysis if that's ever needed.
-_BEACON_HISTORY_LEN     = 20     # connections tracked per (src,dst) pair
-_BEACON_MIN_CONNECTIONS = 5      # minimum history before scoring at all
-_BEACON_MAX_CV          = 0.25   # interval coefficient-of-variation ceiling
+#
+# _BEACON_MIN_MEAN_INTERVAL_S exists because regularity alone isn't enough:
+# confirmed live 2026-08-01, nmap -sS -p1-1000 mislabelled PortScan as Bot,
+# because a fast port scan's SYN probes land on the same destination IP at
+# a very consistent, tight pace -- just as low-CV as a genuine beacon, only
+# on a millisecond timescale instead of seconds-to-minutes. CV alone can't
+# tell "patient beacon" from "fast, evenly-paced scan" since it never looks
+# at the actual interval size. Real C2 checks in on the order of seconds to
+# minutes; nothing faster should ever qualify regardless of how regular it
+# looks.
+_BEACON_HISTORY_LEN         = 20     # connections tracked per (src,dst) pair
+_BEACON_MIN_CONNECTIONS     = 5      # minimum history before scoring at all
+_BEACON_MAX_CV              = 0.25   # interval coefficient-of-variation ceiling
+_BEACON_MIN_MEAN_INTERVAL_S = 2.0    # floor below which it's a scan, not a beacon
 
 FlowKey = Tuple[str, int, str, int, int]   # (ip_a, port_a, ip_b, port_b, proto)
 
@@ -698,9 +709,13 @@ class FlowCollector:
 
         intervals = [b - a for a, b in zip(history, history[1:])]
         mean_interval = sum(intervals) / len(intervals)
-        if mean_interval <= 0:
+        if mean_interval < _BEACON_MIN_MEAN_INTERVAL_S:
+            # Too fast to be a beacon regardless of regularity -- a port
+            # scan's evenly-paced probes look just as low-variance as a
+            # genuine beacon, only on a millisecond timescale instead of
+            # seconds-to-minutes. See _BEACON_MIN_MEAN_INTERVAL_S's comment.
             return {"conn_count": len(history), "is_beacon": False,
-                    "interval_cv": None, "mean_interval_s": mean_interval}
+                    "interval_cv": None, "mean_interval_s": round(mean_interval, 4)}
 
         variance = sum((x - mean_interval) ** 2 for x in intervals) / len(intervals)
         cv = (variance ** 0.5) / mean_interval

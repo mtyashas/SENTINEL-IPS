@@ -15,9 +15,16 @@ Purpose: Self-check for Bot/C2 beacon detection (2026-07-31, backlog item
 
          Confirms: (1) regular-interval connections score as a beacon,
          (2) irregular-interval connections (ordinary browsing) don't,
-         (3) _run_beacon() correctly promotes a beacon-flagged flow to
-         Bot/pred_binary=1, (4) a chunk with no beacon_detected column
-         (simulate mode) is an untouched no-op.
+         (3) fast-but-regular connections (a port scan's evenly-paced
+         probes) do NOT score as a beacon either -- the actual bug found
+         live 2026-08-01: nmap -sS -p1-1000 mislabelled PortScan as Bot,
+         because the original check only looked at interval regularity,
+         never interval size, so a scan's millisecond-scale evenly-spaced
+         probes looked just as "regular" as a genuine seconds-scale
+         beacon. Fixed with _BEACON_MIN_MEAN_INTERVAL_S, (4) _run_beacon()
+         correctly promotes a beacon-flagged flow to Bot/pred_binary=1,
+         (5) a chunk with no beacon_detected column (simulate mode) is an
+         untouched no-op.
 
 Usage:
     python lab/verify_beacon_detection.py
@@ -71,7 +78,21 @@ assert not score2["is_beacon"], f"FAIL: irregular connections incorrectly flagge
 print("PASS: irregular-interval connections correctly NOT flagged")
 
 print()
-print("--- Check 3: _run_beacon() promotes a beacon-flagged flow to Bot ---")
+print("--- Check 3: fast-but-regular connections (port-scan shape) do NOT score as a beacon ---")
+collector3 = FlowCollector()
+# nmap -sS's own probes: same destination, evenly spaced ~5ms apart --
+# exactly the shape that caused the live false positive.
+for i in range(10):
+    make_connection(collector3, sport=60000 + i, ts=base + i * 0.005)
+score3 = collector3.beacon_score(SRC, DST)
+print(f"Fast+regular: {score3}")
+assert not score3["is_beacon"], (
+    f"FAIL: fast port-scan-shaped connections incorrectly flagged as beacon: {score3}"
+)
+print("PASS: fast-but-regular (scan-shaped) connections correctly NOT flagged")
+
+print()
+print("--- Check 4: _run_beacon() promotes a beacon-flagged flow to Bot ---")
 ips = SentinelIPS()  # no model_path needed -- _run_beacon never touches layer1
 chunk = pd.DataFrame({
     "beacon_detected": [True, False],
@@ -87,7 +108,7 @@ print(f"PASS: beacon row -> sig_attack_type=Bot, confidence={result.iloc[0]['con
       f"non-beacon row untouched")
 
 print()
-print("--- Check 4: chunk with no beacon_detected column (simulate mode) is a no-op ---")
+print("--- Check 5: chunk with no beacon_detected column (simulate mode) is a no-op ---")
 plain_chunk = pd.DataFrame({"src_ip": [SRC]})
 result = ips._run_beacon(plain_chunk)
 assert "sig_attack_type" not in result.columns
