@@ -10,6 +10,84 @@ for the full protocol.
 
 ---
 
+## 2026-08-01 — Live re-verified all 5 backlog fixes; found & fixed a new Bot/PortScan false positive; closed both open security findings
+
+**Goal:** Live-test all 5 backlog fixes from the previous session end to
+end (not just the isolated verify scripts, which had already passed) to
+confirm they actually hold up under real traffic, then close out the two
+open `docs/SECURITY_TODO.md` findings.
+
+**Changes:**
+- Restarted the lab (both VMs, target service, `sentinel.py live`) and
+  re-ran all 5 previous fixes live: Honeypot (fake_ssh hit, CRITICAL,
+  real block), WebShell (`/upload`, CRITICAL, `block_request, ip_block`),
+  CSRF (`/account/login` + forged cross-origin POST to `/account/email`,
+  MEDIUM, `action=invalidate_session, alert_medium` — confirmed no
+  `ip_block` in the action string), and the binary-payload signature fix
+  (`nmap -sU` to 500/1701/4500 — confirmed zero false `CommandInject`;
+  the traffic is simply classified `BENIGN`, a separate pre-existing
+  detection-coverage gap this fix was never meant to close).
+- Found a genuine new bug doing this: `nmap -sS -p1-1000` got partially
+  mislabelled `Bot` instead of `PortScan`, at HIGH severity, genuinely
+  blocking the source. Root-caused: `beacon_score()` only checked
+  interval *regularity* (coefficient of variation), never interval
+  *size* — a fast port scan's SYN probes land on the same destination IP
+  at a very consistent, tight pace, just as low-CV as a genuine C2
+  beacon, only milliseconds apart instead of seconds-to-minutes. Fixed
+  with a new `_BEACON_MIN_MEAN_INTERVAL_S = 2.0` floor in
+  `core/flow_collector.py` — connections averaging faster than that can
+  never qualify as a beacon regardless of regularity. Added a regression
+  check to `lab/verify_beacon_detection.py` (10 connections 5ms apart —
+  the exact shape that caused the failure — must not score as a beacon).
+  Restarted the live process again (same hot-reload lesson as the
+  zero-day polarity fix — Python doesn't pick up file changes in an
+  already-running process) and re-ran the scan: 1000/1000 flows now
+  correctly labelled `PortScan`, zero `Bot` mislabels.
+- Fixed both remaining `docs/SECURITY_TODO.md` findings. Reflected XSS in
+  `lab/target_service.py`'s `/search` — now escaped via
+  `markupsafe.escape()`, confirmed via Flask's test client. PowerShell
+  command-injection primitive in `ConnectionTerminator.terminate_ip()` —
+  now validated with `ipaddress.ip_address()` before any PowerShell
+  string gets built, rejecting anything that doesn't parse (both IPv4
+  and IPv6 confirmed still work). Added
+  `lab/verify_connection_terminator_guard.py`. `docs/SECURITY_TODO.md`
+  now has no open findings.
+- 9 verify scripts now exist under `lab/verify_*.py`; every fix this
+  session was regression-tested against all the others plus
+  `sentinel.py health` before committing — zero breakage throughout.
+- 4 commits made and pushed to `origin/main`.
+
+**Decisions:**
+- Insisted on restarting the live process for genuine re-verification
+  rather than trusting the isolated verify scripts alone — this is
+  exactly what caught the Bot/PortScan false positive, which no existing
+  unit check could have caught (the original beacon test only exercised
+  regular-slow and irregular-slow timing, never fast-regular).
+- Fixed the beacon false positive with a simple minimum-interval floor
+  rather than a more elaborate frequency-domain analysis — the gap being
+  closed (fast scans looking as regular as slow beacons) only needs a
+  floor to close, and the existing `_BEACON_MAX_CV` comment already
+  documents this as a naive heuristic with a known ceiling against
+  evasive C2, so added complexity here wouldn't have bought much.
+- Chose IP validation (`ipaddress.ip_address()`) over restructuring the
+  PowerShell invocation for the injection primitive — simpler, and fully
+  closes the vector regardless of what future callers pass in.
+
+**Next steps:**
+- `--enforce-blocks` has still never been turned on. Plan agreed but not
+  yet executed: restart `sentinel.py live` with `--enforce-blocks` in an
+  elevated/Administrator shell, re-run a HIGH/CRITICAL attack, confirm a
+  real Windows Firewall rule appears (`Get-NetFirewallRule -DisplayName
+  "SENTINEL_BLOCK*"`), confirm Kali genuinely loses connectivity
+  afterward, confirm the benign VM and host itself are never touched
+  (the `_local_ips()` self-block guard already exists, just needs
+  confirming under real enforcement), then clean up the firewall rule
+  once done. This is the last milestone toward the user's stated goal of
+  genuine active defense rather than detect-and-log only.
+- Working tree is clean — nothing left uncommitted; everything pushed.
+
+---
+
 ## 2026-07-31 — All 5 backlog items closed: binary-payload FP, honeypot wiring, multiclass PortScan retrain, WebShell+CSRF, Bot beacon detection
 
 **Goal:** Re-verify the zero-day polarity fix from the previous session
