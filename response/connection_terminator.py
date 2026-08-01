@@ -21,6 +21,7 @@ Usage:
         return 401
 """
 
+import ipaddress
 import logging
 import platform
 import subprocess
@@ -212,6 +213,23 @@ class ConnectionTerminator:
         Outputs: TerminationResult with success flag and connection count
         """
         t0 = time.monotonic()
+
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            # _terminate_windows() interpolates ip unescaped into a
+            # PowerShell -Command string; a value containing a quote
+            # could break out and run arbitrary PowerShell. Every ip this
+            # project currently produces is Scapy-decoded and structurally
+            # can't contain one, but validating here closes the primitive
+            # outright rather than relying on that staying true for every
+            # future caller (docs/SECURITY_TODO.md).
+            logger.warning("Refused to terminate connections for invalid IP: %r", ip)
+            return TerminationResult(
+                ip=ip, port=port, success=False,
+                method="invalid_ip", connections_killed=0,
+                latency_ms=round((time.monotonic() - t0) * 1000, 2),
+            )
 
         if not self._enforce_network:
             latency = round((time.monotonic() - t0) * 1000, 2)

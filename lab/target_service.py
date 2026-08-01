@@ -33,6 +33,7 @@ import secrets
 from typing import Tuple
 
 from flask import Flask, request
+from markupsafe import escape
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("lab.target_service")
@@ -59,7 +60,7 @@ def login() -> Tuple[str, int]:
 def search() -> str:
     query = request.args.get("q", "")
     logger.info("Search query received (%d chars)", len(query))
-    return f"no results for: {query}\n"
+    return f"no results for: {escape(query)}\n"
 
 
 @app.route("/upload", methods=["POST"])
