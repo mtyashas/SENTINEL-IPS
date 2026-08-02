@@ -10,6 +10,117 @@ for the full protocol.
 
 ---
 
+## 2026-08-03 — Wrote, verified, and finished an IEEE conference paper end-to-end
+
+**Goal:** Write an IEEE conference paper based on SENTINEL IPS that's both
+genuinely novel and rigorously backed — the user wanted proof behind every
+number used, not just a write-up of existing project docs.
+
+**Changes:**
+- Brainstormed the paper's angle: "benchmark-to-live generalization gap,"
+  three escalating findings from the project's own M4 milestone (cross-
+  dataset domain shift → dataset-to-live collapse → gap re-opening on a
+  bigger, more diverse capture). Chosen over a narrower cross-dataset-only
+  paper or a broad system-tour, as the least-crowded, most evidence-backed
+  angle available.
+- Base paper selection and several later judgment calls were made via a
+  4-persona council debate (Dr. Sentinel/Cipher/Prism/Atlas, from
+  CLAUDE.md's specialist framing) at the user's explicit request, rather
+  than a unilateral choice. Base paper: Cantone, Marrocco & Bria,
+  "Machine Learning in Network Intrusion Detection: A Cross-Dataset
+  Generalization Study," IEEE Access 2024 — unanimous across all four
+  lenses.
+- Built `docs/paper/main.tex` (IEEEtran conference format), `references.bib`
+  (10 real, individually verified citations — a novelty check across IEEE
+  Xplore/ACM DL/arXiv found no direct collision with the paper's angle),
+  and 5 figures (architecture diagram, a bar chart, and two combined
+  before/after confusion-matrix+ROC-curve grids for Findings 2 and 3 — the
+  council was unanimous that dropping "before" images to save space would
+  read as evidence-suppression in a security paper, so both states stayed).
+- Independently re-verified Table 1 (fresh full-CIC-2017 retrain) and
+  Table IV/Finding 3 (pcap replay against the actual saved capture) —
+  both landed within ~1pp of the already-documented numbers.
+- Attempted the same for Table 2/3 (cross-dataset/combined-training) and
+  found 4 real bugs in the process: a wrong confidence threshold (0.55
+  default instead of the documented 0.35 cross-dataset threshold), a
+  train/test leakage bug, a stale `MLDetectionLayer` feature-column cache
+  reused across two different trained models, and a missing
+  undersample-majority-class + dynamic-`scale_pos_weight` step — recovered
+  by locating and reading the project's own original May-2026
+  `combine_and_train.py` script (found at
+  `C:\Users\mtyas\OneDrive\Desktop\ids_framework_v2\`, an earlier framework
+  iteration, at the user's pointer) rather than guessing. Experiment 2
+  reproduced within ~3pp after the threshold fix; Experiment 3 still
+  landed with an unexplained ~17pp recall gap even after all four fixes —
+  user decided to keep Table II's original documented numbers rather than
+  force a match or add a caveat for an unexplained discrepancy.
+- Real incident: `train.py --mode binary`'s default save path overwrote
+  the live production model (`models/benchmarkids_binary.pkl`) during the
+  Table 1 verification run. Recovered via an MD5-matched timestamped
+  snapshot (`benchmarkids_adaptive_20260727_133814_v1.pkl` — byte-identical
+  restore, confirmed). Set up an isolated `lab/paper_repro/` workspace
+  immediately after so every later training/eval run for the paper writes
+  only there, never to the live `models/` directory.
+- Council-debated (unanimous) whether to include the separate M5
+  milestone's findings: don't cite M5's un-re-verified numbers as Results
+  (would create a two-tier evidence standard against the paper's otherwise
+  fully-verified tables), but do upgrade the Conclusion's previously bare
+  "the multiclass classifier has the same problem" claim into a
+  qualitative (no-numbers) description of what was actually found and
+  fixed there.
+- Proactively rewrote several Related Work/Introduction passages that
+  paraphrased cited papers too closely, before the user had even run a
+  plagiarism checker.
+- Installed MiKTeX (none was present locally), compiled the paper
+  end-to-end, fixed an IEEEtran/`\linebreakand` incompatibility and a
+  `caption`+IEEEtran interaction, added the `balance` package to even out
+  the trailing references page.
+- Filled in the real author block (4 students, guide, HOD — Global Academy
+  Of Technology) once the user provided it.
+- Final self-review: every number in the compiled PDF cross-checked
+  against `docs/RESEARCH_PAPER_RESULTS_M1-M4.md` line-by-line; pipeline
+  hyperparameters verified directly against `config.py`/`core/model.py`
+  rather than trusted secondhand.
+- Final paper: 6 pages, 10 citations, 5 figures, 4 tables, compiles clean
+  with zero warnings. Saved at `docs/paper/main.pdf` (source: `main.tex`,
+  `references.bib`, `figures/`, `README.md` with compile instructions and
+  a status checklist).
+
+**Decisions:**
+- Treated a broken reproduction attempt (Experiment 3's unexplained recall
+  gap) as a reason to keep the original documented numbers rather than
+  chase an exact match indefinitely or silently paper over the
+  discrepancy — matches the project's established `[verified]` vs
+  `[documented]` provenance-tagging convention.
+- Chose combined before/after subfigure grids over separate figures or a
+  trimmed subset specifically because the "before" images (e.g. Finding
+  2's near-diagonal ROC curve at 98.66% accuracy) are the load-bearing
+  visual evidence for the paper's central "accuracy is deceptive" claim —
+  dropping them to save space would have undercut the argument the
+  figures exist to make.
+- Did not add speculative future-work content about `--enforce-blocks`
+  validation or higher-volume live-traffic stress testing to the paper —
+  user explicitly wants that added only once those are actually done, not
+  described in advance.
+
+**Next steps:**
+- Only remaining open item is the user's own read-through of the compiled
+  PDF (everything else on the tracked task list is done).
+- User plans to run the paper through a real plagiarism checker (likely
+  Turnitin via the university) and an AI-content detector (GPTZero/
+  ZeroGPT) before submission. Agreed fix path if either comes back
+  flagged: send specific flagged passages for targeted rewrites
+  (plagiarism), or check the venue's AI-disclosure policy first before
+  deciding between adding a disclosure statement vs. genuine human
+  rewriting (AI-content) — explicitly avoided suggesting surface-level
+  detector-evasion tricks.
+- Separately (unrelated to the paper, carried over from earlier tonight):
+  the Windows Firewall Public-profile-disabled gap blocking real
+  `--enforce-blocks` enforcement is still open — see the 2026-08-02 entry
+  below for full context.
+
+---
+
 ## 2026-08-02 — First live --enforce-blocks test; found and fixed two real gaps (stale memory-only blocks, Public-profile firewall disabled)
 
 **Goal:** Execute the plan queued up at the end of 2026-08-01: restart
