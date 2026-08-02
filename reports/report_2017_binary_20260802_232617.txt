@@ -1,0 +1,41 @@
+======================================================================
+SENTINEL IPS v2.0 -- EVALUATION REPORT
+======================================================================
+Experiment : 2017_binary
+Samples    : 504,473
+Timestamp  : 2026-08-02 23:26:17
+
+PERFORMANCE METRICS
+----------------------------------------
+  Accuracy       :  99.79%
+  Precision      :  99.20%
+  Recall         :  99.57%
+  F1-Score       :  99.39%
+  ROC-AUC        :  99.99%
+  Avg Precision  :  99.98%
+  Brier Score    : 0.0017
+  FP Rate        :   0.16%
+  FN Rate        :   0.43%
+
+CONFUSION MATRIX (binary)
+----------------------------------------
+  TP :     84,808
+  TN :    418,616
+  FP :        681
+  FN :        368
+
+BENCHMARK VALIDATION
+----------------------------------------
+  Metric                      Achieved        Target   Pass?
+  ----------------------------------------------------------
+  accuracy                       99.79         99.69    PASS
+  precision                      99.20         98.53    PASS
+  recall                         99.57         99.68    PASS
+  f1                             99.39         99.10    PASS
+  roc_auc                        99.99         99.99    PASS
+  fp_rate                         0.16          0.31    PASS
+  fn_rate                         0.43          0.32    PASS
+
+  OVERALL: PASS (7/7 targets met)
+
+======================================================================
