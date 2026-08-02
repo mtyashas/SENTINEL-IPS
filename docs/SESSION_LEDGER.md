@@ -10,6 +10,91 @@ for the full protocol.
 
 ---
 
+## 2026-08-02 — First live --enforce-blocks test; found and fixed two real gaps (stale memory-only blocks, Public-profile firewall disabled)
+
+**Goal:** Execute the plan queued up at the end of 2026-08-01: restart
+`sentinel.py live` with `--enforce-blocks` in an elevated shell, trigger a
+real attack, confirm a genuine Windows Firewall rule appears, confirm Kali
+loses connectivity, confirm the benign VM/host are never touched — the
+last milestone toward the user's stated goal of active defense rather than
+detect-and-log only.
+
+**Changes:**
+- Booted both lab VMs headless, started `target_service.py` and the
+  benign traffic generator, handed the elevated `sentinel.py live
+  --enforce-blocks` process to the user's own Administrator shell (this
+  agent's shell is non-admin and can't self-elevate).
+- First `nmap -sS -p1-1000` run: PortScan was named correctly (multiclass
+  fix from 2026-07-31 holding up) but is `severity=LOW` per
+  `config.py SEVERITY_LEVELS` — no firewall rule appeared. Root-caused as
+  a real bug, not a wrong attack-type choice: `192.168.56.10` was already
+  present in `threat_intel/ip_blacklist.txt` from prior detect-and-log-only
+  sessions. `IPBlacklister.block()` saw the IP already in `self._entries`
+  and returned `memory_already_blocked` immediately, without ever calling
+  `_apply_fw_block()` — so *any* IP touched before tonight could never get
+  a real firewall rule no matter what ran with `--enforce-blocks`. Fixed
+  by adding a `fw_applied` flag to `_BlockEntry`; `block()` now re-applies
+  the OS firewall rule for an already-known IP if enforcement is on and no
+  rule was ever actually applied for it. Added
+  `lab/verify_reenforce_on_known_ip.py` (4 checks: off stays memory-only,
+  turning enforcement on re-blocks a stale entry, a second block on the
+  same IP is a true no-op, fresh IPs under enforcement are unaffected).
+  Regression-tested against all 13 `lab/verify_*.py` scripts +
+  `sentinel.py health` — zero breakage.
+- Restarted the live process, re-ran the scan: `Get-NetFirewallRule
+  -DisplayName "SENTINEL_BLOCK*"` now showed a real rule
+  (`SENTINEL_BLOCK_192_168_56_10`, Inbound, Block, scoped to that one
+  remote address) — the fix worked. But `curl` from Kali to the host
+  still succeeded (`200 OK`) straight through the "active" block. Second
+  real bug found: `Get-NetFirewallProfile` showed `Private` and `Public`
+  profiles both `Enabled=False` (only `Domain` is on), and the VirtualBox
+  host-only adapter (`Ethernet 2`) has no assigned `NetConnectionProfile`
+  at all, so Windows defaults it to the Public profile — which isn't
+  filtering anything, rule or no rule. This is a host-level Windows
+  Firewall configuration gap, not a SENTINEL code bug.
+- Confirmed the benign VM (`.20`) reached the host normally throughout
+  (`curl` -> `200`), so `_local_ips()`/self-block guard and the general
+  detection pipeline were never the problem.
+- Stopped for the night before fixing the Public-profile gap, since doing
+  so also affects real Wi-Fi firewall enforcement on this machine (Wi-Fi
+  is Public-profile too), not just the isolated lab network — flagged for
+  explicit user sign-off rather than just doing it.
+- Cleaned up: removed the test firewall rule (from the user's elevated
+  shell, since this agent's shell lacks permission), stopped
+  `target_service.py`, confirmed the benign traffic generator had already
+  finished on its own, sent ACPI shutdown to both VMs.
+
+**Decisions:**
+- Treated the "no block happened" result as a bug to root-cause rather
+  than switching to a different, more-obviously-HIGH-severity attack type
+  to make a block happen — the stale-blacklist gap would have silently
+  broken every previously-seen IP under real enforcement if left
+  unfixed, regardless of which attack type was used to trigger it.
+- Did not flip `netsh advfirewall set publicprofile state on` unilaterally
+  even though it's the standard/default-recommended Windows posture,
+  because it changes enforcement on the user's actual Wi-Fi connection,
+  not just the lab — asked first rather than assuming "more secure by
+  default" is automatically wanted here.
+
+**Next steps:**
+- Public-profile firewall gap is still open. Two options on the table for
+  next session: (a) enable Windows Firewall's Public profile outright
+  (`netsh advfirewall set publicprofile state on`) — standard default,
+  but affects real Wi-Fi traffic too; (b) assign the host-only adapter its
+  own network category (e.g. Private) and enable enforcement only for
+  that profile, leaving Public alone. User asked to stop and decide
+  tomorrow rather than pick under time pressure.
+- Once that's resolved: re-run the PortScan test end-to-end, confirm the
+  block actually stops Kali's traffic this time, confirm benign VM/host
+  stay untouched, then this closes out `--enforce-blocks` as the final
+  milestone toward genuine active defense.
+- Lab VMs were shut down (ACPI) at session end; both will need booting
+  again next session. `sentinel.py live` in the user's elevated shell was
+  left for them to stop manually (this agent's shell can't reach that
+  terminal).
+
+---
+
 ## 2026-08-01 — Live re-verified all 5 backlog fixes; found & fixed a new Bot/PortScan false positive; closed both open security findings
 
 **Goal:** Live-test all 5 backlog fixes from the previous session end to
