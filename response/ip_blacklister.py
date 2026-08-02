@@ -93,6 +93,7 @@ class _BlockEntry:
     reason:     str
     blocked_at: datetime
     expires_at: Optional[datetime]   # None = permanent
+    fw_applied: bool = False         # True once an OS firewall rule exists for this IP
 
 
 class IPBlacklister:
@@ -315,20 +316,29 @@ class IPBlacklister:
                 if existing.expires_at is not None and expires_at is None:
                     existing.expires_at = None
                     logger.info("Block for %s upgraded to permanent", ip)
-                latency = round((time.monotonic() - t0) * 1000, 2)
-                return BlacklistResult(
-                    ip=ip, success=True, method="memory_already_blocked",
-                    reason=reason, expires_at=existing.expires_at,
-                    latency_ms=latency,
+                # A prior block may have been recorded while OS enforcement was
+                # off (e.g. this IP was seen in an earlier enforce_os_firewall=
+                # False run) -- apply the firewall rule now instead of silently
+                # staying a memory-only block forever once enforcement turns on.
+                if not (self._enforce_fw and not existing.fw_applied):
+                    latency = round((time.monotonic() - t0) * 1000, 2)
+                    return BlacklistResult(
+                        ip=ip, success=True, method="memory_already_blocked",
+                        reason=reason, expires_at=existing.expires_at,
+                        latency_ms=latency,
+                    )
+            else:
+                self._entries[ip] = _BlockEntry(
+                    ip=ip, reason=reason,
+                    blocked_at=datetime.now(tz=timezone.utc),
+                    expires_at=expires_at,
                 )
 
-            self._entries[ip] = _BlockEntry(
-                ip=ip, reason=reason,
-                blocked_at=datetime.now(tz=timezone.utc),
-                expires_at=expires_at,
-            )
-
         success, method = self._apply_fw_block(ip)
+
+        with self._lock:
+            if ip in self._entries:
+                self._entries[ip].fw_applied = success and self._enforce_fw
 
         if expires_at is None:
             self._persist_ip(ip)
