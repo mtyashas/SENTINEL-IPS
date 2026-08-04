@@ -10,6 +10,55 @@ for the full protocol.
 
 ---
 
+## 2026-08-04 — Fixed GitHub contribution-graph identity; revised the IEEE paper end-to-end
+
+**Goal:** Diagnose why ~200 pushed commits weren't showing as GitHub
+contributions, then make a round of requested edits to the IEEE paper
+(docs/paper/main.tex).
+
+**Changes:**
+- Root cause: global git identity on this machine was a collaborator's
+  (`Brindha185 <brindhaadiga182005@gmail.com>`), not the user's own
+  (`MT Yashas <mtyashas1ga23cs091@gmail.com>`). Fixed local repo config.
+- Rewrote all 55 commits' author via
+  `git rebase --root --exec 'git commit --amend --no-edit --author=...'`,
+  preserving original author dates (critical — an earlier `--reset-author`
+  attempt collapsed dates to "now" and had to be caught and reverted before
+  push). Force-pushed corrected history to `origin/main`.
+- `git filter-repo --mailmap` looked like it succeeded but was a silent
+  no-op — don't trust its exit message, verify with
+  `git log --format='%ae' | sort -u` after.
+- Saved a standing preference: push local `main` to `origin` at the end of
+  every session without asking first (memory: `feedback_push_at_session_end`).
+- Paper edits: removed an author, rewrote the abstract to <=150 words with
+  no citations, renamed Index Terms to Keywords (5 terms), added the two
+  live-capture datasets to the Datasets subsection, replaced the
+  detection-only architecture figure with a compact full-system diagram
+  (later repositioned to render after its introducing text, not before),
+  added a Feature Importance (SHAP) subsection with a real citation, fixed
+  Finding 2's figures interrupting Finding 3's text mid-sentence, and
+  retitled twice (final: "Generalization Gap and Adaptive Retraining in
+  Machine Learning-Based Network Intrusion Detection: A Live-Traffic Case
+  Study with XGBoost" — chosen for search/index keyword coverage over a
+  catchier hook). Committed and pushed (`f9dde2c`).
+
+**Decisions:**
+- Kept the `teammate` remote (github.com/Brindha185/SENTINEL-IPS-v2)
+  untouched — genuinely different person/fork, unrelated diverged history,
+  never push there.
+- Did not add the collaborator's email as a verified alternate on the
+  user's GitHub account (the other backfill option) — history rewrite was
+  chosen instead since it also fixes authorship going forward, not just
+  retroactively.
+- Title went through several rounds of user feedback (catchy → keyword-dense)
+  before landing on pure keyword density over a hook, since findability in
+  IEEE Xplore/Scholar mattered more than memorability.
+
+**Next steps:** None specified — paper is at a good checkpoint (6 pages,
+clean build, all requested edits applied and verified visually page-by-page).
+
+---
+
 ## 2026-08-03 — Wrote, verified, and finished an IEEE conference paper end-to-end
 
 **Goal:** Write an IEEE conference paper based on SENTINEL IPS that's both
