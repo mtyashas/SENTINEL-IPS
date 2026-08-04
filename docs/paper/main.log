@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.28 (MiKTeX 25.12) (preloaded format=pdflatex 2026.8.3)  3 AUG 2026 02:17
+This is pdfTeX, Version 3.141592653-2.6-1.40.28 (MiKTeX 25.12) (preloaded format=pdflatex 2026.8.3)  4 AUG 2026 22:52
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -680,7 +680,7 @@ File: epstopdf-sys.cfg 2021/03/18 v2.0 Configuration of epstopdf for MiKTeX
 Package caption Info: Begin \AtBeginDocument code.
 Package caption Info: End \AtBeginDocument code.
 
-Underfull \hbox (badness 2205) in paragraph at lines 109--113
+Underfull \hbox (badness 2205) in paragraph at lines 102--106
 []\OT1/ptm/m/n/10 We re-pro-duce the cross-dataset gen-er-al-iza-tion col-
  []
 
@@ -692,102 +692,118 @@ tyas/AppData/Local/Programs/MiKTeX/fonts/enc/dvips/base/8r.enc}
 
 
 ]
-LaTeX Font Info:    Trying to load font information for U+msa on input line 181
+LaTeX Font Info:    Trying to load font information for U+msa on input line 173
 .
 
 (C:\Users\mtyas\AppData\Local\Programs\MiKTeX\tex/latex/amsfonts\umsa.fd
 File: umsa.fd 2013/01/14 v3.01 AMS symbols A
 )
-LaTeX Font Info:    Trying to load font information for U+msb on input line 181
+LaTeX Font Info:    Trying to load font information for U+msb on input line 173
 .
 
 (C:\Users\mtyas\AppData\Local\Programs\MiKTeX\tex/latex/amsfonts\umsb.fd
 File: umsb.fd 2013/01/14 v3.01 AMS symbols B
 )
 LaTeX Font Info:    Trying to load font information for TS1+ptm on input line 2
-20.
+26.
 
 (C:\Users\mtyas\AppData\Local\Programs\MiKTeX\tex/latex/psnfss\ts1ptm.fd
 File: ts1ptm.fd 2001/06/04 font definitions for TS1/ptm.
 )
-[2]
 LaTeX Font Info:    Trying to load font information for OT1+pcr on input line 2
-55.
- (C:\Users\mtyas\AppData\Local\Programs\MiKTeX\tex/latex/psnfss\ot1pcr.fd
+63.
+
+(C:\Users\mtyas\AppData\Local\Programs\MiKTeX\tex/latex/psnfss\ot1pcr.fd
 File: ot1pcr.fd 2001/06/04 font definitions for OT1/pcr.
 )
+[2]
 <figures/finding1_bar_2017v2018.png, id=17, 368.577pt x 217.0509pt>
 File: figures/finding1_bar_2017v2018.png Graphic file (type png)
 <use figures/finding1_bar_2017v2018.png>
 Package pdftex.def Info: figures/finding1_bar_2017v2018.png  used on input line
- 355.
+ 369.
 (pdftex.def)             Requested size: 226.79846pt x 133.56334pt.
-<figures/finding2_confusion_before.png, id=19, 376.7676pt x 351.2322pt>
-File: figures/finding2_confusion_before.png Graphic file (type png)
-<use figures/finding2_confusion_before.png>
-Package pdftex.def Info: figures/finding2_confusion_before.png  used on input l
-ine 392.
-(pdftex.def)             Requested size: 118.6778pt x 110.63336pt.
-<figures/finding2_confusion_after.png, id=20, 376.7676pt x 351.2322pt>
-File: figures/finding2_confusion_after.png Graphic file (type png)
-<use figures/finding2_confusion_after.png>
-Package pdftex.def Info: figures/finding2_confusion_after.png  used on input li
-ne 397.
-(pdftex.def)             Requested size: 118.6778pt x 110.63336pt.
-<figures/finding2_roc_before.png, id=21, 569.4876pt x 495.2904pt>
-File: figures/finding2_roc_before.png Graphic file (type png)
-<use figures/finding2_roc_before.png>
-Package pdftex.def Info: figures/finding2_roc_before.png  used on input line 40
-2.
-(pdftex.def)             Requested size: 118.6778pt x 103.21295pt.
-<figures/finding2_roc_after.png, id=22, 569.4876pt x 495.2904pt>
-File: figures/finding2_roc_after.png Graphic file (type png)
-<use figures/finding2_roc_after.png>
-Package pdftex.def Info: figures/finding2_roc_after.png  used on input line 407
-.
-(pdftex.def)             Requested size: 118.6778pt x 103.21295pt.
-<figures/m4_confidence_scores.png, id=23, 498.1812pt x 350.2686pt>
-File: figures/m4_confidence_scores.png Graphic file (type png)
-<use figures/m4_confidence_scores.png>
-Package pdftex.def Info: figures/m4_confidence_scores.png  used on input line 4
-34.
-(pdftex.def)             Requested size: 226.79846pt x 159.46332pt.
-
-[3]
-<figures/finding3_confusion_before.png, id=30, 433.62pt x 351.2322pt>
+ [3]
+<figures/finding3_confusion_before.png, id=25, 433.62pt x 351.2322pt>
 File: figures/finding3_confusion_before.png Graphic file (type png)
 <use figures/finding3_confusion_before.png>
 Package pdftex.def Info: figures/finding3_confusion_before.png  used on input l
-ine 469.
+ine 447.
 (pdftex.def)             Requested size: 118.6778pt x 96.12556pt.
-<figures/finding3_confusion_after.png, id=31, 433.62pt x 351.2322pt>
+<figures/finding3_confusion_after.png, id=26, 433.62pt x 351.2322pt>
 File: figures/finding3_confusion_after.png Graphic file (type png)
 <use figures/finding3_confusion_after.png>
 Package pdftex.def Info: figures/finding3_confusion_after.png  used on input li
-ne 474.
+ne 452.
 (pdftex.def)             Requested size: 118.6778pt x 96.12556pt.
-<figures/finding3_roc_before.png, id=32, 569.4876pt x 495.2904pt>
+<figures/finding3_roc_before.png, id=27, 569.4876pt x 495.2904pt>
 File: figures/finding3_roc_before.png Graphic file (type png)
 <use figures/finding3_roc_before.png>
-Package pdftex.def Info: figures/finding3_roc_before.png  used on input line 47
-9.
+Package pdftex.def Info: figures/finding3_roc_before.png  used on input line 45
+7.
 (pdftex.def)             Requested size: 118.6778pt x 103.21295pt.
-<figures/finding3_roc_after.png, id=33, 569.4876pt x 495.2904pt>
+<figures/finding3_roc_after.png, id=28, 569.4876pt x 495.2904pt>
 File: figures/finding3_roc_after.png Graphic file (type png)
 <use figures/finding3_roc_after.png>
-Package pdftex.def Info: figures/finding3_roc_after.png  used on input line 484
+Package pdftex.def Info: figures/finding3_roc_after.png  used on input line 462
 .
 (pdftex.def)             Requested size: 118.6778pt x 103.21295pt.
- [4 <./figures/finding1_bar_2017v2018.png> <./figures/finding2_confusion_before
-.png> <./figures/finding2_confusion_after.png> <./figures/finding2_roc_before.p
-ng> <./figures/finding2_roc_after.png> <./figures/m4_confidence_scores.png>] (m
-ain.bbl
+<figures/finding2_confusion_before.png, id=29, 376.7676pt x 351.2322pt>
+File: figures/finding2_confusion_before.png Graphic file (type png)
+<use figures/finding2_confusion_before.png>
+Package pdftex.def Info: figures/finding2_confusion_before.png  used on input l
+ine 492.
+(pdftex.def)             Requested size: 118.6778pt x 110.63336pt.
+<figures/finding2_confusion_after.png, id=30, 376.7676pt x 351.2322pt>
+File: figures/finding2_confusion_after.png Graphic file (type png)
+<use figures/finding2_confusion_after.png>
+Package pdftex.def Info: figures/finding2_confusion_after.png  used on input li
+ne 497.
+(pdftex.def)             Requested size: 118.6778pt x 110.63336pt.
+<figures/finding2_roc_before.png, id=31, 569.4876pt x 495.2904pt>
+File: figures/finding2_roc_before.png Graphic file (type png)
+<use figures/finding2_roc_before.png>
+Package pdftex.def Info: figures/finding2_roc_before.png  used on input line 50
+2.
+(pdftex.def)             Requested size: 118.6778pt x 103.21295pt.
+<figures/finding2_roc_after.png, id=32, 569.4876pt x 495.2904pt>
+File: figures/finding2_roc_after.png Graphic file (type png)
+<use figures/finding2_roc_after.png>
+Package pdftex.def Info: figures/finding2_roc_after.png  used on input line 507
+.
+(pdftex.def)             Requested size: 118.6778pt x 103.21295pt.
+<figures/m4_confidence_scores.png, id=33, 498.1812pt x 350.2686pt>
+File: figures/m4_confidence_scores.png Graphic file (type png)
+<use figures/m4_confidence_scores.png>
+Package pdftex.def Info: figures/m4_confidence_scores.png  used on input line 5
+20.
+(pdftex.def)             Requested size: 226.79846pt x 159.46332pt.
+<figures/shap_top15.png, id=34, 714.9912pt x 496.7358pt>
+File: figures/shap_top15.png Graphic file (type png)
+<use figures/shap_top15.png>
+Package pdftex.def Info: figures/shap_top15.png  used on input line 529.
+(pdftex.def)             Requested size: 239.39923pt x 166.31845pt.
 
-Package balance Warning: You have called \balance in second column
-(balance)                Columns might not be balanced.
+Underfull \hbox (badness 10000) in paragraph at lines 532--532
+[]\OT1/ptm/m/n/10 Fig. 6: |Mean ab-so-lute SHAP value per fea-ture
+ []
 
-[5 <./figures/finding3_confusion_before.png> <./figures/finding3_confusion_afte
-r.png> <./figures/finding3_roc_before.png> <./figures/finding3_roc_after.png>])
+
+Underfull \hbox (badness 10000) in paragraph at lines 532--532
+\OT1/ptm/m/n/10 for the CIC-IDS-2017-trained clas-si-fier (Ta-ble I[]).
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 532--532
+\OT1/pcr/m/n/10 bwd_packet_length_std \OT1/ptm/m/n/10 dom-i-nates ev-ery other
+ []
+
+[4 <./figures/finding1_bar_2017v2018.png> <./figures/finding3_confusion_before.
+png> <./figures/finding3_confusion_after.png> <./figures/finding3_roc_before.pn
+g> <./figures/finding3_roc_after.png>] [5 <./figures/finding2_confusion_before.
+png> <./figures/finding2_confusion_after.png> <./figures/finding2_roc_before.pn
+g> <./figures/finding2_roc_after.png> <./figures/m4_confidence_scores.png> <./f
+igures/shap_top15.png>] (main.bbl)
 
 ** Conference Paper **
 Before submitting the final camera ready copy, remember to:
@@ -799,6 +815,10 @@ Before submitting the final camera ready copy, remember to:
  uses only Type 1 fonts and that every step in the generation
  process uses the appropriate paper size.
 
+
+Overfull \vbox (0.50992pt too high) has occurred while \output is active []
+
+
 [6] (main.aux)
  ***********
 LaTeX2e <2025-11-01>
@@ -806,13 +826,13 @@ L3 programming layer <2025-12-24>
  ***********
  ) 
 Here is how much of TeX's memory you used:
- 16005 strings out of 467871
- 325581 string characters out of 5418377
- 708786 words of memory out of 5000000
- 44613 multiletter control sequences out of 15000+600000
- 668536 words of font info for 117 fonts, out of 8000000 for 9000
+ 15988 strings out of 467871
+ 325392 string characters out of 5418377
+ 706813 words of memory out of 5000000
+ 44595 multiletter control sequences out of 15000+600000
+ 669643 words of font info for 118 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 84i,9n,104p,439b,909s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 84i,9n,104p,445b,792s stack positions out of 10000i,1000n,20000p,200000b,200000s
 <C:/Users/mtyas/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/
 cmmi10.pfb><C:/Users/mtyas/AppData/Local/Programs/MiKTeX/fonts/type1/public/ams
 fonts/cm/cmr10.pfb><C:/Users/mtyas/AppData/Local/Programs/MiKTeX/fonts/type1/pu
@@ -823,9 +843,9 @@ KTeX/fonts/type1/urw/times/utmb8a.pfb><C:/Users/mtyas/AppData/Local/Programs/Mi
 KTeX/fonts/type1/urw/times/utmbi8a.pfb><C:/Users/mtyas/AppData/Local/Programs/M
 iKTeX/fonts/type1/urw/times/utmr8a.pfb><C:/Users/mtyas/AppData/Local/Programs/M
 iKTeX/fonts/type1/urw/times/utmri8a.pfb>
-Output written on main.pdf (6 pages, 612288 bytes).
+Output written on main.pdf (6 pages, 687116 bytes).
 PDF statistics:
- 91 PDF objects out of 1000 (max. 8388607)
+ 93 PDF objects out of 1000 (max. 8388607)
  0 named destinations out of 1000 (max. 500000)
- 63 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 68 words of extra memory for PDF output out of 10000 (max. 10000000)
 

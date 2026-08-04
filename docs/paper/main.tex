@@ -11,8 +11,8 @@
 
 \begin{document}
 
-\title{From Benchmark to Live Traffic: Characterizing and Closing the\\
-Generalization Gap in ML-Based Network Intrusion Detection}
+\title{Generalization Gap and Adaptive Retraining in Machine Learning-Based\\
+Network Intrusion Detection: A Live-Traffic Case Study with XGBoost}
 
 \author{
 \IEEEauthorblockN{Brindha Adiga}
@@ -44,41 +44,31 @@ nikitachavan1ga23cs111@gmail.com}
 Global Academy Of Technology\\
 Bangalore, India\\
 sowmya.bk@gat.ac.in}
-\and
-\IEEEauthorblockN{Dr. R Rajkumar}
-\IEEEauthorblockA{Head of Department\\
-Computer Science and Engineering\\
-Global Academy Of Technology\\
-Bangalore, India}
 }
 
 \maketitle
 
 \begin{abstract}
-Machine-learning-based network intrusion detection systems (ML-IDS) are
-routinely reported at 95--99\% accuracy on benchmark datasets such as
-CIC-IDS-2017, yet prior work has shown that this in-distribution performance
-collapses when a classifier trained on one dataset is evaluated on another
--- a documented cross-dataset generalization gap. This paper extends that
-finding along a strictly harder and, to our knowledge, unstudied axis: from
-a static benchmark dataset to traffic physically captured live on the
-network the system is meant to protect. Using an XGBoost-based IDS trained
-to 99.69\% accuracy (99.99\% ROC-AUC) on CIC-IDS-2017, we show that
-accuracy on live-captured lab traffic from the same deployment initially
-collapsed to near-chance ranking (ROC-AUC 0.61) despite deceptively
-acceptable raw accuracy, was restored to 99.95\% via a ground-truth-informed
-adaptive retrain, and then partially failed again on a larger, more diverse
-capture (95.16\% accuracy, 100\% of previously-unseen-port traffic
-misclassified) before a second, targeted retrain closed the gap
-(99.74\%). We diagnose the root causes at each stage -- including three
-previously dormant implementation defects in the retraining pipeline itself
--- and argue that benchmark accuracy should not be treated as a proxy for
-live deployment readiness, and that a single corrective retrain does not
-permanently close the gap as traffic diversity grows.
+Machine-learning intrusion detection systems (ML-IDS) routinely report
+95--99\% accuracy on benchmark datasets, yet this accuracy is known to
+collapse once a model is evaluated on a different dataset -- a
+cross-dataset generalization gap. This work extends that problem to a
+harder, unstudied axis: from a static benchmark to traffic physically
+captured live on the network being protected. Using an XGBoost-based IDS
+trained to 99.69\% accuracy (99.99\% ROC-AUC) on CIC-IDS-2017, we show live
+lab traffic first collapsed in ranking to near-chance (ROC-AUC 0.61)
+despite acceptable raw accuracy, was restored to 99.95\% via a
+ground-truth-informed adaptive retrain, then partially failed again on a
+larger, more diverse capture (95.16\% accuracy, all unseen-port traffic
+misclassified) before a second targeted retrain closed the gap (99.74\%),
+after fixing three dormant retraining-pipeline defects. Benchmark accuracy
+is not a reliable proxy for live deployment readiness, and one retrain does
+not permanently close the gap as traffic diversity grows.
 \end{abstract}
 
+\renewcommand{\IEEEkeywordsname}{Keywords}
 \begin{IEEEkeywords}
-intrusion detection, machine learning, domain generalization, XGBoost, concept drift, live traffic evaluation
+live traffic evaluation, domain generalization, adaptive retraining, intrusion detection, XGBoost
 \end{IEEEkeywords}
 
 \section{Introduction}
@@ -102,7 +92,10 @@ corpora. We instead take a trained model and point it at traffic
 physically captured, in real time, from the network it is supposed to be
 protecting, and find the same collapse there too -- worse than the
 dataset-to-dataset case -- and that it comes back on a second, more varied
-capture even after an initial fix appeared to work.
+capture even after an initial fix appeared to work. We study these
+findings on SENTINEL, our own 13-phase, 32-module machine-learning-based
+intrusion prevention framework (Section~\ref{sec:architecture}); we refer
+to it as SENTINEL throughout the rest of this paper.
 
 Our contributions are:
 \begin{enumerate}
@@ -125,10 +118,9 @@ Our contributions are:
       motivating diversity-aware validation over one-shot correction.
 \end{enumerate}
 
-The system under study, SENTINEL IPS, is a 13-phase, 32-module intrusion
-prevention framework; this paper deliberately scopes to its core ML
-detection pipeline and the generalization-gap findings above rather than
-its full feature set (Section~\ref{sec:architecture}). The remainder of
+This paper deliberately scopes to SENTINEL's core ML detection pipeline
+and the generalization-gap findings above rather than its full feature set
+(Section~\ref{sec:architecture}). The remainder of
 this paper is organized as follows. Section~\ref{sec:related} reviews
 related work on cross-dataset and temporal generalization in ML-IDS.
 Section~\ref{sec:architecture} briefly describes the system architecture.
@@ -200,55 +192,77 @@ live traffic observed grows more varied.
 \section{System Architecture}
 \label{sec:architecture}
 
-\begin{figure}[t]
+SENTINEL (Fig.~\ref{fig:architecture}) ingests packets, flows, and logs,
+enriches them with threat-intelligence signals (IP/domain reputation, Tor
+exit nodes, honeypot alerts), and passes both into a three-layer Detection
+Engine: an XGBoost-based flow classifier (the subject of this paper), a
+signature-based layer matching known payload patterns (SQL injection, XSS,
+command injection, web shells, CSRF), and an Isolation-Forest-based anomaly
+detector for zero-day traffic. Detections fan out to attribution (MITRE
+ATT\&CK~\cite{mitreattack} mapping, geolocation, threat-actor profiling),
+response (IP blacklisting, connection termination, rate limiting),
+adaptive retraining, forensics (PCAP logging, timeline reconstruction), and
+SHAP-based explainability, all surfaced on a live dashboard. This paper
+evaluates only the ML classification layer of the Detection Engine; the
+remaining layers are named here for context but are outside its scope,
+except where the adaptive-retraining loop is directly implicated in
+Section~\ref{sec:discussion}, and where SHAP explainability is applied
+directly to this layer's classifier in Section~\ref{sec:results}.D.
+
+\begin{figure}[b]
 \centering
 \begin{tikzpicture}[
-  box/.style={draw, rounded corners, minimum width=2.6cm, minimum height=0.7cm, align=center, font=\footnotesize},
-  scoped/.style={draw, dashed, rounded corners, inner sep=6pt}
+  layer/.style={draw, rounded corners, align=center, font=\scriptsize, inner sep=4pt},
+  scoped/.style={draw, thick, rounded corners, align=center, font=\scriptsize, inner sep=4pt, fill=gray!15},
+  small/.style={draw, rounded corners, align=center, font=\scriptsize, inner sep=3pt}
 ]
-\node[box, fill=gray!15] (ml) at (0,0) {ML Classifier\\(XGBoost)};
-\node[box, fill=gray!15] (sig) at (2.9,0) {Signature\\Detection};
-\node[box, fill=gray!15] (anom) at (5.8,0) {Anomaly\\Detection (IF)};
+\node[layer, text width=6.8cm] (ingest) at (3.5,6)
+  {\textbf{Ingestion Layer} -- packet/flow/log capture};
 
-\node[box] (mitre) at (0,-1.4) {MITRE\\Mapping};
-\node[box] (shap) at (2.9,-1.4) {SHAP\\Explainability};
-\node[box] (honey) at (5.8,-1.4) {Honeypot\\Deception};
-\node[box] (adapt) at (2.9,-2.5) {Adaptive\\Retraining};
+\node[small, text width=2.1cm] (intel) at (0.7,4.4)
+  {\textbf{Intelligence}\\threat feeds, reputation};
 
-\begin{scope}[on background layer]
-\node[scoped, fit=(ml)(sig)(anom), label={[font=\footnotesize]above:Detection engine (this paper's scope)}] {};
-\node[scoped, fit=(mitre)(shap)(honey)(adapt), label={[font=\footnotesize]below:Out of scope (except \S\ref{sec:discussion} defects)}] {};
-\end{scope}
+\node[scoped, text width=4.2cm] (detect) at (4.4,4.4)
+  {\textbf{Detection Engine}\\(this paper's scope)\\ML \textbullet\ Signature \textbullet\ Anomaly};
+
+\node[layer, text width=6.8cm] (down) at (3.5,2.6)
+  {\textbf{Attribution / Response / Adaptive / Forensics / Explainability}};
+
+\node[layer, text width=6.8cm] (dash) at (3.5,1.2)
+  {\textbf{Dashboard}};
+
+\draw[->] (ingest.south) -- (detect.north);
+\draw[->] (intel.east) -- (detect.west);
+\draw[->] (detect.south) -- (down.north);
+\draw[->] (down.south) -- (dash.north);
 \end{tikzpicture}
-\caption{SENTINEL IPS detection-layer architecture. This paper's scope is
-the three-layer detection engine (top); other modules of the deployed
-32-module system are named but not evaluated here, except where directly
-implicated in the adaptive-retraining defects of
+\caption{SENTINEL system architecture (compact). This paper evaluates
+only the highlighted Detection Engine; the other layers of the deployed
+32-module system are shown for context, except where the Adaptive layer's
+retraining pipeline is directly implicated in the defects discussed in
 Section~\ref{sec:discussion}.}
 \label{fig:architecture}
 \end{figure}
-
-SENTINEL IPS combines three parallel detection layers (Fig.~\ref{fig:architecture}):
-an XGBoost-based flow classifier (the subject of this paper), a
-signature-based layer matching known payload patterns (SQL injection, XSS,
-command injection, web shells, CSRF), and an Isolation-Forest-based anomaly
-detector for zero-day traffic. Detections are enriched with MITRE
-ATT\&CK~\cite{mitreattack} technique mapping, SHAP-based explanations, and routed to a response layer
-(IP blacklisting, connection termination). A honeypot layer and an
-adaptive-retraining loop close the feedback cycle. This paper evaluates
-only the ML classification layer; the remaining modules are named here for
-context but are outside its scope, except where the adaptive-retraining
-loop is directly implicated in Section~\ref{sec:discussion}.
 
 \section{Methodology}
 \label{sec:methodology}
 
 \subsection{Datasets}
-We use CIC-IDS-2017~\cite{sharafaldin2018generating} (2{,}636{,}647 flows,
-82 features, five days of labelled traffic covering DoS, DDoS, brute
-force, web attacks, infiltration, port scanning, and botnet activity) and
-its successor CSE-CIC-IDS-2018 (15{,}007{,}575 flows, 80 features,
-extended attack scenarios on a larger AWS-hosted topology).
+We use four datasets, two static benchmarks and two live packet captures
+of our own. CIC-IDS-2017~\cite{sharafaldin2018generating} (2{,}636{,}647
+flows, 82 features, five days of labelled traffic covering DoS, DDoS,
+brute force, web attacks, infiltration, port scanning, and botnet
+activity) is the training set throughout. Its successor CSE-CIC-IDS-2018
+(15{,}007{,}575 flows, 80 features, extended attack scenarios on a larger
+AWS-hosted topology) is used only as the cross-dataset evaluation target
+in Section~\ref{sec:results}.A. \emph{Live Capture 1} (2{,}092 flows:
+2{,}038 attacker, 54 benign) and \emph{Live Capture 2} (17{,}612 flows:
+15{,}247 attacker, 2{,}365 benign) are ground-truth-labelled packet
+captures we generated ourselves from the VirtualBox lab described in
+Section~\ref{sec:methodology}.C, using known source IPs and controlled
+attacker tooling (\texttt{nmap}, \texttt{hydra}) rather than any existing
+public corpus; these are the evaluation targets for
+Sections~\ref{sec:results}.B and~\ref{sec:results}.C respectively.
 
 \subsection{Feature Pipeline}
 All experiments use the same pipeline: median imputation, standard
@@ -386,35 +400,6 @@ TP / TN / FP / FN & 2037/27/27/1 & 2037/54/0/1 \\
 \end{tabular}
 \end{table}
 
-\begin{figure}[t]
-\centering
-\begin{subfigure}{0.23\textwidth}
-\includegraphics[width=\linewidth]{figures/finding2_confusion_before.png}
-\caption{Confusion matrix, before}
-\end{subfigure}
-\hfill
-\begin{subfigure}{0.23\textwidth}
-\includegraphics[width=\linewidth]{figures/finding2_confusion_after.png}
-\caption{Confusion matrix, after}
-\end{subfigure}
-\par\bigskip
-\begin{subfigure}{0.23\textwidth}
-\includegraphics[width=\linewidth]{figures/finding2_roc_before.png}
-\caption{ROC curve, before}
-\end{subfigure}
-\hfill
-\begin{subfigure}{0.23\textwidth}
-\includegraphics[width=\linewidth]{figures/finding2_roc_after.png}
-\caption{ROC curve, after}
-\end{subfigure}
-\caption{Finding 2 (Table~\ref{tab:table3}): confusion matrices and ROC
-curves before/after the first adaptive retrain. The near-diagonal
-before-retrain ROC curve (c) is the visual counterpart of the ROC-AUC=0.61
-in Table~\ref{tab:table3} -- the ranking was barely better than chance
-despite 98.66\% accuracy.}
-\label{fig:finding2grid}
-\end{figure}
-
 The headline result here is not the accuracy figure but the ROC-AUC gap
 (Fig.~\ref{fig:finding2grid}): 98.66\% accuracy looks deceptively
 acceptable, but a ROC-AUC of 0.61 shows the underlying ranking was barely
@@ -428,13 +413,6 @@ learned notions of "typical benign" or "typical PortScan." An adaptive
 retrain mixing the full ground-truth-labelled capture into training
 (Section~\ref{sec:methodology}) restored ROC-AUC to 0.9999 and eliminated
 all 27 false positives.
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=0.9\linewidth]{figures/m4_confidence_scores.png}
-\caption{Pre-fix model confidence: a benign request scored 0.9999 (confidently misclassified as attack); a real port scan scored 0.0126 (confidently misclassified as benign).}
-\label{fig:m4confidence}
-\end{figure}
 
 \subsection{Gap Persists Within Live Traffic}
 
@@ -507,6 +485,67 @@ including all 732 previously-failing port-8081 probes. We independently
 reproduced this table by replaying the original capture through the same
 before/after model pair in isolation, obtaining accuracy 95.49\%/99.72\%
 and ROC-AUC 0.8984/0.9998, within noise of the values above.
+
+\begin{figure}[t]
+\centering
+\begin{subfigure}{0.23\textwidth}
+\includegraphics[width=\linewidth]{figures/finding2_confusion_before.png}
+\caption{Confusion matrix, before}
+\end{subfigure}
+\hfill
+\begin{subfigure}{0.23\textwidth}
+\includegraphics[width=\linewidth]{figures/finding2_confusion_after.png}
+\caption{Confusion matrix, after}
+\end{subfigure}
+\par\bigskip
+\begin{subfigure}{0.23\textwidth}
+\includegraphics[width=\linewidth]{figures/finding2_roc_before.png}
+\caption{ROC curve, before}
+\end{subfigure}
+\hfill
+\begin{subfigure}{0.23\textwidth}
+\includegraphics[width=\linewidth]{figures/finding2_roc_after.png}
+\caption{ROC curve, after}
+\end{subfigure}
+\caption{Finding 2 (Table~\ref{tab:table3}): confusion matrices and ROC
+curves before/after the first adaptive retrain. The near-diagonal
+before-retrain ROC curve (c) is the visual counterpart of the ROC-AUC=0.61
+in Table~\ref{tab:table3} -- the ranking was barely better than chance
+despite 98.66\% accuracy.}
+\label{fig:finding2grid}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.9\linewidth]{figures/m4_confidence_scores.png}
+\caption{Pre-fix model confidence: a benign request scored 0.9999 (confidently misclassified as attack); a real port scan scored 0.0126 (confidently misclassified as benign).}
+\label{fig:m4confidence}
+\end{figure}
+
+\subsection{Feature Importance (SHAP)}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\linewidth]{figures/shap_top15.png}
+\caption{Mean absolute SHAP value per feature for the CIC-IDS-2017-trained
+classifier (Table~\ref{tab:table1}). \texttt{bwd\_packet\_length\_std}
+dominates every other feature by close to an order of magnitude.}
+\label{fig:shap}
+\end{figure}
+
+To interpret \emph{why} the classifier evaluated throughout
+Section~\ref{sec:results} makes the decisions it does, we compute SHAP
+values~\cite{lundberg2017shap} for the CIC-IDS-2017-trained model underlying
+Table~\ref{tab:table1}. Fig.~\ref{fig:shap} shows
+\texttt{bwd\_packet\_length\_std} -- the variability of backward-direction
+packet sizes within a flow -- as by far the single strongest predictor,
+with every other feature contributing an order of magnitude less. This is
+consistent with the flows misclassified in
+Section~\ref{sec:results}.B (Fig.~\ref{fig:m4confidence}): both were
+minimal, near-empty exchanges with almost no backward traffic to compute
+this statistic over, which is exactly the regime this dominant feature
+cannot discriminate well -- a plausible mechanistic link between the
+classifier's most-relied-upon feature and where it fails on live traffic.
 
 \section{Discussion}
 \label{sec:discussion}

@@ -74,4 +74,9 @@ T.~Chen and C.~Guestrin, ``{XGBoost}: A scalable tree boosting system,'' in
   \emph{Proceedings of the 22nd ACM SIGKDD International Conference on
   Knowledge Discovery and Data Mining (KDD)}, 2016, pp. 785--794.
 
+\bibitem{lundberg2017shap}
+S.~M. Lundberg and S.-I. Lee, ``A unified approach to interpreting model
+  predictions,'' in \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}, vol.~30, 2017, pp. 4765--4774.
+
 \end{thebibliography}

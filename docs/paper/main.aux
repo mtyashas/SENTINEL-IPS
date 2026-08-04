@@ -14,55 +14,56 @@
 \citation{sharafaldin2018generating}
 \@writefile{toc}{\contentsline {section}{\numberline {II}Related Work}{2}{}\protected@file@percent }
 \newlabel{sec:related}{{II}{2}{}{section.2}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces SENTINEL IPS detection-layer architecture. This paper's scope is the three-layer detection engine (top); other modules of the deployed 32-module system are named but not evaluated here, except where directly implicated in the adaptive-retraining defects of Section~\ref {sec:discussion}.}}{2}{}\protected@file@percent }
-\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
-\newlabel{fig:architecture}{{1}{2}{}{figure.1}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {III}System Architecture}{2}{}\protected@file@percent }
 \newlabel{sec:architecture}{{III}{2}{}{section.3}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {IV}Methodology}{2}{}\protected@file@percent }
-\newlabel{sec:methodology}{{IV}{2}{}{section.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-A}}Datasets}{2}{}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces SENTINEL system architecture (compact). This paper evaluates only the highlighted Detection Engine; the other layers of the deployed 32-module system are shown for context, except where the Adaptive layer's retraining pipeline is directly implicated in the defects discussed in Section~\ref {sec:discussion}.}}{2}{}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{fig:architecture}{{1}{2}{}{figure.1}{}}
 \citation{zouhri2024filter}
 \citation{chen2016xgboost}
 \citation{cantone2024crossdataset}
 \citation{cantone2024crossdataset}
+\@writefile{toc}{\contentsline {section}{\numberline {IV}Methodology}{3}{}\protected@file@percent }
+\newlabel{sec:methodology}{{IV}{3}{}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-A}}Datasets}{3}{}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-B}}Feature Pipeline}{3}{}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-C}}Experimental Design}{3}{}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-D}}Adaptive Retraining Strategy}{3}{}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-E}}Evaluation Metrics}{3}{}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {V}Results}{3}{}\protected@file@percent }
-\newlabel{sec:results}{{V}{3}{}{section.5}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-A}}Cross-Dataset Domain Shift}{3}{}\protected@file@percent }
 \@writefile{lot}{\contentsline {table}{\numberline {I}{\ignorespaces In-distribution benchmark (CIC-IDS-2017 $\rightarrow $ CIC-IDS-2017)}}{3}{}\protected@file@percent }
 \newlabel{tab:table1}{{I}{3}{}{table.1}{}}
 \@writefile{lot}{\contentsline {table}{\numberline {II}{\ignorespaces Cross-dataset shift vs. combined training}}{3}{}\protected@file@percent }
 \newlabel{tab:table2}{{II}{3}{}{table.2}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {V}Results}{3}{}\protected@file@percent }
+\newlabel{sec:results}{{V}{3}{}{section.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-A}}Cross-Dataset Domain Shift}{3}{}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-B}}Dataset-to-Live Collapse}{3}{}\protected@file@percent }
+\citation{lundberg2017shap}
 \citation{cantone2024crossdataset}
 \@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Cross-dataset shift (2017$\rightarrow $2018) vs. combined training, precision/recall/F1.}}{4}{}\protected@file@percent }
 \newlabel{fig:finding1}{{2}{4}{}{figure.2}{}}
 \@writefile{lot}{\contentsline {table}{\numberline {III}{\ignorespaces Dataset-to-live collapse and adaptive-retrain correction}}{4}{}\protected@file@percent }
 \newlabel{tab:table3}{{III}{4}{}{table.3}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-C}}Gap Persists Within Live Traffic}{4}{}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {VI}Discussion}{4}{}\protected@file@percent }
-\newlabel{sec:discussion}{{VI}{4}{}{section.6}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Finding 2 (Table~\ref {tab:table3}): confusion matrices and ROC curves before/after the first adaptive retrain. The near-diagonal before-retrain ROC curve (c) is the visual counterpart of the ROC-AUC=0.61 in Table~\ref {tab:table3} -- the ranking was barely better than chance despite 98.66\% accuracy.}}{4}{}\protected@file@percent }
-\newlabel{fig:finding2grid}{{3}{4}{}{figure.3}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Pre-fix model confidence: a benign request scored 0.9999 (confidently misclassified as attack); a real port scan scored 0.0126 (confidently misclassified as benign).}}{4}{}\protected@file@percent }
-\newlabel{fig:m4confidence}{{4}{4}{}{figure.4}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {IV}{\ignorespaces Gap re-opening on a larger, more diverse capture}}{4}{}\protected@file@percent }
+\newlabel{tab:table4}{{IV}{4}{}{table.4}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Finding 3 (Table~\ref {tab:table4}): confusion matrices and ROC curves before/after the second adaptive retrain, on the larger 17{,}612-flow capture. Panel (c)'s before-retrain false positives are concentrated on the previously-unseen port-8081 traffic.}}{4}{}\protected@file@percent }
+\newlabel{fig:finding3grid}{{3}{4}{}{figure.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-D}}Feature Importance (SHAP)}{4}{}\protected@file@percent }
 \citation{gupta2025generative}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Finding 2 (Table~\ref {tab:table3}): confusion matrices and ROC curves before/after the first adaptive retrain. The near-diagonal before-retrain ROC curve (c) is the visual counterpart of the ROC-AUC=0.61 in Table~\ref {tab:table3} -- the ranking was barely better than chance despite 98.66\% accuracy.}}{5}{}\protected@file@percent }
+\newlabel{fig:finding2grid}{{4}{5}{}{figure.4}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Pre-fix model confidence: a benign request scored 0.9999 (confidently misclassified as attack); a real port scan scored 0.0126 (confidently misclassified as benign).}}{5}{}\protected@file@percent }
+\newlabel{fig:m4confidence}{{5}{5}{}{figure.5}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {VI}Discussion}{5}{}\protected@file@percent }
+\newlabel{sec:discussion}{{VI}{5}{}{section.6}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Mean absolute SHAP value per feature for the CIC-IDS-2017-trained classifier (Table~\ref {tab:table1}). \texttt  {bwd\_packet\_length\_std} dominates every other feature by close to an order of magnitude.}}{5}{}\protected@file@percent }
+\newlabel{fig:shap}{{6}{5}{}{figure.6}{}}
 \bibstyle{IEEEtran}
 \bibdata{references}
 \bibcite{cantone2024crossdataset}{1}
 \bibcite{sharafaldin2018generating}{2}
 \bibcite{viegas2017reliable}{3}
-\@writefile{lot}{\contentsline {table}{\numberline {IV}{\ignorespaces Gap re-opening on a larger, more diverse capture}}{5}{}\protected@file@percent }
-\newlabel{tab:table4}{{IV}{5}{}{table.4}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Finding 3 (Table~\ref {tab:table4}): confusion matrices and ROC curves before/after the second adaptive retrain, on the larger 17{,}612-flow capture. Panel (c)'s before-retrain false positives are concentrated on the previously-unseen port-8081 traffic.}}{5}{}\protected@file@percent }
-\newlabel{fig:finding3grid}{{5}{5}{}{figure.5}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {VII}Conclusion}{5}{}\protected@file@percent }
-\newlabel{sec:conclusion}{{VII}{5}{}{section.7}{}}
-\@writefile{toc}{\contentsline {section}{References}{5}{}\protected@file@percent }
 \bibcite{thanh2026tanids}{4}
 \bibcite{layeghy2023explainable}{5}
 \bibcite{zouhri2024filter}{6}
@@ -70,4 +71,8 @@
 \bibcite{gupta2025generative}{8}
 \bibcite{mitreattack}{9}
 \bibcite{chen2016xgboost}{10}
+\bibcite{lundberg2017shap}{11}
+\@writefile{toc}{\contentsline {section}{\numberline {VII}Conclusion}{6}{}\protected@file@percent }
+\newlabel{sec:conclusion}{{VII}{6}{}{section.7}{}}
+\@writefile{toc}{\contentsline {section}{References}{6}{}\protected@file@percent }
 \gdef \@abspage@last{6}
