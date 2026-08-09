@@ -123,6 +123,7 @@ from evaluation.metrics import IDSEvaluator
 # Dashboard
 from dashboard.attack_map import AttackMap
 from dashboard.live_monitor import LiveMonitor
+from dashboard.server import start_dashboard_server
 
 # Preprocessing (for simulate mode)
 from core.features import NetworkFeatureEngineer, get_feature_matrix
@@ -1058,6 +1059,9 @@ def _run_live(args) -> None:
         enforce_blocks=args.enforce_blocks,
     )
 
+    dashboard_handle = start_dashboard_server(ips.monitor, ips.attack_map)
+    logger.info("Live dashboard: http://localhost:%d", dashboard_handle.port)
+
     interface  = args.interface or LIVE_INTERFACE_DEFAULT
     bpf_filter = args.bpf_filter or LIVE_BPF_FILTER
     logger.info("Live capture mode on interface: %s (filter=%r)", interface, bpf_filter)
@@ -1153,6 +1157,7 @@ def _run_live(args) -> None:
             gc.collect()
         flow_sniffer.stop()
         honeypot.stop()
+        dashboard_handle.stop()
         ips.summary()
         ips.shutdown()
 
@@ -1228,7 +1233,7 @@ def _check_pipeline_wiring() -> List[str]:
 
 
 def _run_health(args) -> None:
-    """Import-only health check — verifies all 32 modules load cleanly."""
+    """Import-only health check — verifies all 33 modules load cleanly."""
     _modules = [
         "config",
         "core.preprocessing", "core.features", "core.model", "core.flow_collector",
@@ -1243,7 +1248,7 @@ def _run_health(args) -> None:
         "explainability.shap_explainer", "explainability.attack_narrator",
         "explainability.risk_scorer",
         "evaluation.metrics", "evaluation.reporter",
-        "dashboard.live_monitor", "dashboard.attack_map",
+        "dashboard.live_monitor", "dashboard.attack_map", "dashboard.server",
     ]
 
     ok, fail = [], []
@@ -1274,7 +1279,7 @@ def _run_health(args) -> None:
         print("OK  : every instantiated module is called somewhere in the pipeline")
 
     if not fail and not dead:
-        print("\nAll 32 modules operational and wired into the pipeline.")
+        print("\nAll 33 modules operational and wired into the pipeline.")
         print("Run: python train.py   to train models")
         print("Run: python sentinel.py simulate   to process data")
         print("Run: streamlit run dashboard/app.py   to open dashboard")
@@ -1314,7 +1319,7 @@ def _build_parser() -> argparse.ArgumentParser:
                       help="Enable OS-level IP blocking (requires root)")
 
     # --- health ---
-    sub.add_parser("health", help="Verify all 32 modules load cleanly")
+    sub.add_parser("health", help="Verify all 33 modules load cleanly")
 
     return p
 
