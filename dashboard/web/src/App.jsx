@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { io } from 'socket.io-client'
+import KpiRow from './components/KpiRow.jsx'
+import SystemHealth from './components/SystemHealth.jsx'
 
 export default function App() {
   const [connected, setConnected] = useState(false)
@@ -13,12 +15,17 @@ export default function App() {
     return () => socket.disconnect()
   }, [])
 
+  const monitor = data?.monitor ?? null
+
   return (
     <div className="app">
       <h1 className="header">SENTINEL IPS v2.0</h1>
       <p className="subheader">Real-Time Security Operations Centre</p>
-      <p>Connected: {connected ? 'yes' : 'no'}</p>
-      <pre>{data ? JSON.stringify(data.monitor, null, 2) : 'waiting for data...'}</pre>
+
+      {!connected && <div className="banner-reconnecting">Reconnecting to dashboard server…</div>}
+
+      <KpiRow monitor={monitor} uniqueIps={data?.unique_ips} />
+      <SystemHealth health={data?.health} />
     </div>
   )
 }
