@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { io } from 'socket.io-client'
 import KpiRow from './components/KpiRow.jsx'
 import SystemHealth from './components/SystemHealth.jsx'
+import ThroughputChart from './components/ThroughputChart.jsx'
+import AlertTable from './components/AlertTable.jsx'
 
 export default function App() {
   const [connected, setConnected] = useState(false)
@@ -25,6 +27,12 @@ export default function App() {
       {!connected && <div className="banner-reconnecting">Reconnecting to dashboard server…</div>}
 
       <KpiRow monitor={monitor} uniqueIps={data?.unique_ips} />
+
+      <div className="grid-2">
+        <ThroughputChart series={monitor?.throughput_fps ?? []} />
+        <AlertTable events={monitor?.events_list ?? []} />
+      </div>
+
       <SystemHealth health={data?.health} />
     </div>
   )
