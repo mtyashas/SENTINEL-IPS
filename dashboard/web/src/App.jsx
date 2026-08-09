@@ -14,7 +14,9 @@ export default function App() {
   }, [])
 
   return (
-    <div style={{ fontFamily: 'monospace', padding: 20 }}>
+    <div className="app">
+      <h1 className="header">SENTINEL IPS v2.0</h1>
+      <p className="subheader">Real-Time Security Operations Centre</p>
       <p>Connected: {connected ? 'yes' : 'no'}</p>
       <pre>{data ? JSON.stringify(data.monitor, null, 2) : 'waiting for data...'}</pre>
     </div>
