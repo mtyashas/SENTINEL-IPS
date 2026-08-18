@@ -35,6 +35,55 @@ protected server now; moving to a real deployment later only changes which
 interface Scapy binds to (a real NIC in promiscuous mode instead of this
 host-only virtual adapter) and the BPF filter — nothing else changes.
 
+## 1b. Multi-host variant (VMs on separate physical laptops)
+
+Full design rationale: `docs/superpowers/specs/2026-08-18-multihost-lab-topology-design.md`.
+
+The single-host topology above breaks the moment the attacker/benign VMs
+move to different physical laptops — VirtualBox Host-Only Networks don't
+span machines. When Kali and Ubuntu-benign live on two separate laptops
+instead of both being VMs on the Windows host:
+
+- **Windows laptop stays the server** — runs `sentinel.py live`,
+  `lab/target_service.py`, and the honeypot listeners, all on its real
+  WiFi NIC instead of the VirtualBox host-only adapter.
+- **Each VM stays on VirtualBox's default NAT adapter** (not Bridged, not
+  Host-Only) — its traffic exits through its own laptop's normal WiFi
+  connection. Don't switch to Bridged Adapter mode by default: it's
+  unreliable over WiFi (many routers apply client isolation or reject a
+  VM's separate MAC address on the shared radio, and it can fail
+  unpredictably mid-session). If you want to try Bridged anyway, run a
+  2-minute probe first (`ping` from the VM to the Windows laptop) and fall
+  back to NAT immediately on failure — decide per-laptop, independently.
+- **No fixed IP scheme** — the WiFi's DHCP assigns real addresses. Read
+  each laptop's actual IP (`ipconfig` / `ip addr`) at the start of the
+  session instead of assuming `.10`/`.20`/`.1`.
+- **Windows Firewall** — add scoped inbound-allow rules for exactly the
+  ports SENTINEL needs, rather than flipping the whole Public profile on
+  (that'd affect all WiFi traffic on the laptop, not just this lab):
+
+  ```powershell
+  netsh advfirewall firewall add rule name="SENTINEL_lab_target" dir=in action=allow protocol=TCP localport=80
+  netsh advfirewall firewall add rule name="SENTINEL_lab_honeypot" dir=in action=allow protocol=TCP localport=2222,2121,8080,5432,9000
+  ```
+
+- **No source code changes needed** — `LIVE_BPF_FILTER` (`config.py`) has
+  no subnet restriction, `--interface`/`--host` are already
+  CLI-overridable, and the honeypot already binds `0.0.0.0`.
+
+Runbook:
+
+1. All 3 laptops join the same WiFi; note each laptop's actual IP.
+2. Optional Bridged-mode probe per new laptop; fall back to NAT on failure.
+3. Add the firewall rules above.
+4. `python lab\target_service.py --host 0.0.0.0`
+5. Resolve the Windows laptop's real WiFi adapter name (same
+   `get_windows_if_list()` approach as section 2 below, picking the WiFi
+   adapter instead of "VirtualBox Host-Only Ethernet Adapter"), then
+   `python sentinel.py live --interface "<resolved WiFi adapter name>"`
+6. Point Kali's attack tools and `lab/gen_benign_traffic.sh` at the
+   Windows laptop's actual WiFi IP from step 1.
+
 ## 2. Windows host prerequisites
 
 - **Npcap** — required for Scapy to capture packets on Windows. Install
