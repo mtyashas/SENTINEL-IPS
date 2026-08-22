@@ -109,6 +109,16 @@ explicitly, matching `m5`'s existing log output, not just "retraining
 happened." Before/after accuracy on the live captures themselves (not just
 the CIC-2017 held-out set) is also printed, exactly as `m5` does.
 
+## Known limitation
+
+The live sample this retrain learns from is narrow: two physical Kali
+VMs, both running the same `nmap -sS` invocation, on the same WiFi
+network, over one night. This closes the specific gap measured on
+2026-08-20/21 — it is not a guarantee of robustness to different scan
+tools, port ranges, or timing patterns. Treat the "PASS" verdict as
+confirmation this particular measured regression is fixed, not as
+evidence of general PortScan robustness across arbitrary scanners.
+
 ## Testing
 
 The script's own before/after accuracy comparison on the live captures
