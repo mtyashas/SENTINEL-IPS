@@ -1,6 +1,6 @@
-# DoS/DDoS Multiclass Retraining via a New Cross-Flow Rate Feature — Design Spec
+# DoS/DDoS Detection via a Rule-Based Cross-Flow Rate Signal — Design Spec
 
-**Date:** 2026-08-23
+**Date:** 2026-08-23 (revised same day — see Revision History)
 **Status:** Approved, ready for implementation planning
 
 ## Problem
@@ -10,149 +10,165 @@ fixed PortScan's generic-`ATTACK`-fallback problem but explicitly excluded
 DoS/DDoS: a single `hping3` flood packet is indistinguishable from one
 failed connection attempt when looking at that flow's own features in
 isolation — no cross-flow rate signal exists in the current schema. This
-spec builds that signal and closes the gap for DoS specifically.
+spec closes that gap.
 
-## Why `beacon_score()` isn't the answer
+## Revision History
 
-`core/flow_collector.py`'s `beacon_score()` already tracks connection
-regularity per `(src_ip, dst_ip)` pair for Bot/C2 detection, but its own
-constants document exactly why it can't be reused as-is:
-`_BEACON_MIN_MEAN_INTERVAL_S = 2.0` exists specifically because a fast,
-evenly-paced port scan has the same low coefficient-of-variation as a
-genuine slow beacon — confirmed live 2026-08-01, `nmap -sS` got
-mislabelled `Bot`. Anything faster than 2 seconds is deliberately excluded
-from beacon scoring. That excluded fast range is exactly where both scans
-and floods live — but a scan and a flood need different signals from each
-other too (port diversity vs. raw rate), so this needs a genuinely new
-method, not a threshold tweak to the existing one.
+**Original approach (superseded):** the first version of this spec
+proposed a new `conn_rate_per_sec` feature fed into a multiclass model
+retrain, mirroring `docs/superpowers/specs/2026-08-22-multiclass-portscan-retrain-design.md`'s
+pattern exactly. That approach is **not used** — see below.
+
+**Why it changed:** `lab/verify_beacon_detection.py`'s docstring revealed
+that this exact class of problem (a cross-flow signal the per-flow ML
+model has no visibility into) was already solved once before, for
+Bot/C2 beacon detection, and *not* via retraining: "adding a genuinely
+new stateful feature to the trained ML models would need recomputing it
+across the entire CIC-2017 training set, a much bigger lift than this
+architectural gap needs to justify." Instead, `FlowCollector.beacon_score()`
+feeds a **rule-based override** — `sentinel.py`'s `_run_beacon()` —
+that directly promotes a beacon-flagged flow to `Bot`/`pred_binary=1`,
+bypassing the multiclass model entirely. This is a proven, already-shipped
+pattern in this exact codebase, for the same shape of problem, and it
+eliminates the dataset-shortcut risk the original approach explicitly
+disclosed (there is no retraining, so there is no CIC-2017/2018
+compatibility question at all). Given this project's use case is
+server-level security (not a one-off lab demo), the simpler, already-
+validated mechanism is the better call.
 
 ## Architecture
 
-**New method, not new tracking infrastructure.** `FlowCollector` already
-maintains `self._conn_history: Dict[(src_ip, dst_ip), deque]` —
-connection start timestamps per pair, populated unconditionally for every
-new flow (`core/flow_collector.py` around line 621), not just for
-beaconing. Add `connection_rate(src_ip, dst_ip) -> float` as a sibling to
-`beacon_score()`, reading the same deque, computing raw
-connections-per-second instead of regularity:
+**New method on `FlowCollector`, mirroring `beacon_score()`'s exact
+shape.** `core/flow_collector.py` already maintains
+`self._conn_history: Dict[(src_ip, dst_ip), deque]` — connection start
+timestamps per pair, populated unconditionally for every new flow (around
+line 621), the same history `beacon_score()` reads. Add
+`connection_rate(src_ip, dst_ip) -> dict`, returning a decided boolean
+(`is_flood`) plus supporting detail, the same shape `beacon_score()`
+returns (`conn_count`, `is_beacon`, ...):
 
 ```python
-def connection_rate(self, src_ip: str, dst_ip: str) -> float:
-    history = self._conn_history.get((src_ip, dst_ip))
-    if history is None or len(history) < 2:
-        return 0.0
+_DOS_MIN_CONNECTIONS    = 2      # minimum history before scoring at all
+_DOS_RATE_THRESHOLD_PER_S = 10.0 # connections/sec at or above this = flood-shaped
+
+def connection_rate(self, src_ip: str, dst_ip: str) -> dict:
+    """
+    Cross-flow connection-rate signal for one (src_ip, dst_ip) pair, for
+    DoS/DDoS flood detection. Reads the same _conn_history beacon_score()
+    uses, just interpreted as raw rate instead of regularity --
+    beacon_score() deliberately excludes anything faster than
+    _BEACON_MIN_MEAN_INTERVAL_S (2s) since a fast, evenly-paced scan looks
+    identical to a beacon by regularity alone; this is the signal for
+    that excluded fast range.
+
+    Naive threshold, same class of limitation as beacon_score()'s own CV
+    heuristic: catches a flood at a fixed rate, tuned against this lab's
+    own hping3 capture -- not validated against production-scale
+    legitimate traffic (e.g. many real users behind one NAT gateway could
+    plausibly open connections fast enough to cross a poorly-chosen
+    threshold), and defeated by an attacker who deliberately throttles
+    below it. See "Known limitations" below.
+
+    Inputs:  src_ip, dst_ip -- the pair to score
+    Outputs: dict with conn_count, is_flood (bool), rate_per_sec (float,
+             None if fewer than _DOS_MIN_CONNECTIONS connections recorded)
+    """
+    with self._lock:
+        history = list(self._conn_history.get((src_ip, dst_ip), ()))
+
+    if len(history) < _DOS_MIN_CONNECTIONS:
+        return {"conn_count": len(history), "is_flood": False, "rate_per_sec": None}
+
     span = history[-1] - history[0]
-    if span <= 0:
-        return float(len(history))
-    return (len(history) - 1) / span
+    rate = float(len(history)) if span <= 0 else (len(history) - 1) / span
+    is_flood = rate >= _DOS_RATE_THRESHOLD_PER_S
+    return {"conn_count": len(history), "is_flood": is_flood, "rate_per_sec": round(rate, 2)}
 ```
 
-No changes to `ingest_packet()` or any other write path — this is a pure
-read-side addition.
-
-**Live-pipeline wiring.** `sentinel.py`'s `_run_live()` already has a
-precedent for exactly this pattern: `_add_beacon_column()` queries
+**Live-pipeline wiring, mirroring `_add_beacon_column()`/`_run_beacon()`
+exactly.** `sentinel.py`'s `_run_live()` already populates a
+`beacon_detected` column via `_add_beacon_column()` (queries
 `collector.beacon_score(s, d)["is_beacon"]` per unique `(src_ip, dst_ip)`
-pair in a chunk and adds it as a column, after `FlowCollector` produces
-the flow DataFrame, before `process_chunk()`. Add a sibling
-`_add_connection_rate_column()` following the identical structure, adding
-a `conn_rate_per_sec` column.
+pair in the chunk, before `process_chunk()`). Add a sibling
+`_add_dos_column()` populating a `dos_flagged` column from
+`collector.connection_rate(s, d)["is_flood"]`, called at the identical
+two call sites `_add_beacon_column()` already has (main loop and
+`KeyboardInterrupt` flush).
 
-**Retraining script.** New `lab/m7_multiclass_retrain_dos.py` (matching
-the `m5`/`m6` numbering; neither existing script is modified). Reprocesses
-the same two PCAPs from `docs/superpowers/specs/2026-08-22-multiclass-portscan-retrain-design.md`
-(`pcap/sentinel_20260820_124005_6571ee5e.pcap`,
-`pcap/sentinel_20260820_192521_bc0ea8f1.pcap`), computing
-`connection_rate()` for each labeled flow's `(src_ip, dst_ip)` pair using
-the same IP tables and collision-window exclusion `m6` established.
-Extends the labeling heuristic: attacker-sourced flow with a connection
-rate above a tuned threshold → `DoS` (single-source flood — our captures
-never had two attackers flooding the same target concurrently, so `DoS`
-is the honest label, not `DDoS`; the `DDoS` class in `ATTACK_CLASSES`
-stays unaddressed by this effort). Everything below the threshold keeps
-falling through to `m6`'s existing PortScan/WebAttack/BENIGN logic
-unchanged. Retrains via the same `AdaptiveTrainer` pattern established in
-`m6`: cache combined with a CIC-IDS-2017 sample, held-out validation,
-keep the new model only if it measurably improves.
+Add `SentinelIPS._run_dos()`, mirroring `_run_beacon()`'s exact structure
+(precedence: never override an existing signature match; promote to
+`sig_attack_type="DoS"`, `pred_binary=1`, `confidence` floor 0.75, same
+as beacon's 0.75 floor and same reasoning — a rate inference, not an exact
+pattern hit). Called at the same pipeline position `_run_beacon()` is
+(`sentinel.py:304`), immediately after it, so both cross-flow rule stages
+run before Layer 3 anomaly detection sees the chunk.
 
-## Known limitation (explicit, not hidden)
+Single-source only: our captures never had two attackers flooding the
+same target concurrently, so this labels `DoS`, not `DDoS` — the `DDoS`
+class in `ATTACK_CLASSES` stays unaddressed by this effort.
 
-The new `conn_rate_per_sec` feature can only ever be genuinely populated
-for our own live-captured PCAPs — CIC-IDS-2017/2018 rows get a
-default/zero value, since only their pre-extracted CSVs exist, not raw
-packets. This is a real dataset-shortcut risk: the model could learn
-"this feature is nonzero" as a proxy for "this is our live-capture data"
-rather than learning genuine flood behavior. This is accepted and
-disclosed rather than mitigated with synthetic historical values (which
-would just trade one kind of artificiality for another) — matching the
-same honest-tradeoff approach the PortScan fix took with its F1 dip. The
-held-out CIC-2017 validation set structurally cannot fully validate this
-feature either way, since it can never contain a real value for it; the
-actual validation is future live tests exhibiting correctly-labeled DoS
-detections, not this round's held-out metric alone.
+## Known limitations (unchanged from the superseded version, still apply)
 
-## Known limitations (additional)
+**Narrow sample.** Tuned against exactly one `hping3 --flood` invocation
+on one WiFi hotspot's baseline traffic conditions — closes the specific
+gap measured on these two captures, not a general robustness guarantee.
 
-**Narrow sample, same as the PortScan fix.** This is tuned against exactly
-one `hping3 --flood` invocation on one WiFi hotspot's baseline traffic
-conditions. It closes the specific gap measured on these two captures —
-not a general robustness guarantee across flood tools, rates, or network
-environments. Worse than PortScan's version of this caveat: a raw
-connections-per-second threshold tuned on a quiet lab network risks
-false-positiving in a genuinely busy production environment (e.g. many
-real users behind one NAT gateway legitimately opening connections fast).
-Add `# ponytail`-style known-ceiling documentation on `connection_rate()`
-itself, matching `beacon_score()`'s own existing pattern, rather than
-presenting the threshold as validated for production traffic volumes.
+**Threshold risk at production scale.** A raw connections-per-second
+threshold tuned on a quiet lab network risks false-positiving in a
+genuinely busy production environment (many real users behind one NAT
+gateway legitimately opening connections fast). Given this project's
+stated goal is real server-level protection, not just a lab demo, this is
+a real gap for production readiness, not a cosmetic caveat — tracked
+explicitly as a follow-up: a genuinely production-grade version would use
+an *adaptive, baseline-relative* threshold (e.g. "N times this specific
+server's own typical rate," learned per-deployment) rather than one
+hardcoded global number. Not attempted in this round.
 
-**Naive threshold is evadable by design, not just by accident.** A rate
-threshold can always be defeated by an attacker who deliberately throttles
-below it — a "low-and-slow" flood. `beacon_score()`'s own docstring
-already states this same honest limit for its own heuristic ("catches
-unsophisticated/naive beaconing, not evasive C2 -- upgrade path is a
-proper time-series/frequency-domain analysis if that's ever needed").
-`connection_rate()` gets the identical class of limitation and should
-document it the same way, not imply robustness the mechanism doesn't have.
+**Evadable by design.** A rate threshold is always defeated by an
+attacker who deliberately throttles below it (a "low-and-slow" flood) --
+the identical class of limitation `beacon_score()`'s own docstring
+already discloses for itself ("catches unsophisticated/naive beaconing,
+not evasive C2").
 
-## Validation
+## What's eliminated by this revision
 
-Same as `m6`: `AdaptiveTrainer.retrain()` against a stratified held-out
-CIC-IDS-2017 slice, PASS/NO IMPROVEMENT verdict based on measured
-recall/F1 change. Additionally, before/after accuracy specifically on the
-DoS-labeled portion of the combined live captures (mirroring `m6`'s
-combined-capture accuracy check), since that's the metric that actually
-reflects whether this fix works, given the held-out set's structural
-blind spot noted above.
+The dataset-shortcut risk from the superseded retrain-based approach no
+longer applies -- there is no retraining, so there is no question of a
+new feature column being populated only for live data and never for
+CIC-2017/2018.
 
 ## Testing
 
-Matches this project's established `lab/` convention (no pytest suite):
-`FlowCollector.connection_rate()` is a pure function over existing state
-and gets a direct unit test, same treatment as `m6`'s `label_flows()`
-test. The full retrain script's own printed before/after accuracy and
-PASS/NO IMPROVEMENT verdict is the integration-level verification, run
-directly rather than through a test framework.
+Matches `lab/verify_beacon_detection.py`'s exact pattern (same file this
+whole design is modeled on): synthetic Scapy packets fed through
+`FlowCollector.ingest_packet()` via a `make_connection()` helper, at
+controlled timestamps, to exercise `connection_rate()` directly --
+regular-but-slow (not a flood), regular-and-fast (a flood), and a
+below-history-minimum case. Then a second check exercising `_run_dos()`
+directly on a synthetic chunk, mirroring `verify_beacon_detection.py`'s
+Check 4/5 (promotion behavior, precedence against an existing signature
+match, and the simulate-mode no-op case where `dos_flagged` is absent).
 
 ## File structure changes
 
 ```
 core/
-└── flow_collector.py           MODIFIED — add connection_rate() method only
+└── flow_collector.py           MODIFIED — add connection_rate() + its
+                                 _DOS_* constants, adjacent to beacon_score()
 
-sentinel.py                     MODIFIED — add _add_connection_rate_column(),
-                                 call it in _run_live() alongside the existing
-                                 _add_beacon_column()
+sentinel.py                     MODIFIED — add _add_dos_column() (mirrors
+                                 _add_beacon_column()) and _run_dos()
+                                 (mirrors _run_beacon()); wire both at the
+                                 same call sites as their beacon siblings
 
 lab/
-├── m7_multiclass_retrain_dos.py       NEW — everything for this effort
-└── test_flow_collector_connection_rate.py   NEW — unit test for connection_rate()
-
-models/
-├── train_cache_multiclass_dos.parquet     NEW (script output, cache)
-└── mistakes_buffer_multiclass_dos.parquet NEW (script output, cache — deleted on
-                                                 successful retrain, matching
-                                                 MistakeCollector.clear()'s existing behavior)
+└── verify_dos_detection.py     NEW — mirrors verify_beacon_detection.py's
+                                 structure exactly, for connection_rate()
+                                 and _run_dos()
 ```
 
-`m5_multiclass_retrain.py` and `m6_multiclass_retrain_multihost.py` are
-not modified.
+No changes to `lab/m5_multiclass_retrain.py`,
+`lab/m6_multiclass_retrain_multihost.py`, `detection/layer1_ml.py`,
+`adaptive/adaptive_trainer.py`, or `adaptive/mistake_collector.py` — this
+approach touches none of them. No new `lab/m7_*.py` retraining script,
+no new `models/*.parquet` cache files — this revision needs neither.
