@@ -91,6 +91,29 @@ feature either way, since it can never contain a real value for it; the
 actual validation is future live tests exhibiting correctly-labeled DoS
 detections, not this round's held-out metric alone.
 
+## Known limitations (additional)
+
+**Narrow sample, same as the PortScan fix.** This is tuned against exactly
+one `hping3 --flood` invocation on one WiFi hotspot's baseline traffic
+conditions. It closes the specific gap measured on these two captures —
+not a general robustness guarantee across flood tools, rates, or network
+environments. Worse than PortScan's version of this caveat: a raw
+connections-per-second threshold tuned on a quiet lab network risks
+false-positiving in a genuinely busy production environment (e.g. many
+real users behind one NAT gateway legitimately opening connections fast).
+Add `# ponytail`-style known-ceiling documentation on `connection_rate()`
+itself, matching `beacon_score()`'s own existing pattern, rather than
+presenting the threshold as validated for production traffic volumes.
+
+**Naive threshold is evadable by design, not just by accident.** A rate
+threshold can always be defeated by an attacker who deliberately throttles
+below it — a "low-and-slow" flood. `beacon_score()`'s own docstring
+already states this same honest limit for its own heuristic ("catches
+unsophisticated/naive beaconing, not evasive C2 -- upgrade path is a
+proper time-series/frequency-domain analysis if that's ever needed").
+`connection_rate()` gets the identical class of limitation and should
+document it the same way, not imply robustness the mechanism doesn't have.
+
 ## Validation
 
 Same as `m6`: `AdaptiveTrainer.retrain()` against a stratified held-out
