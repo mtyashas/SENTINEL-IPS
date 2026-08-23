@@ -303,6 +303,9 @@ class SentinelIPS:
         # --- Beacon (Bot/C2) detection on cross-flow connection regularity ---
         chunk = self._run_beacon(chunk)
 
+        # --- DoS/DDoS detection on cross-flow connection rate ---
+        chunk = self._run_dos(chunk)
+
         # --- Layer 3: anomaly detection (fit on first non-trivial chunk) ---
         chunk = self._run_anomaly(chunk)
 
@@ -544,6 +547,64 @@ class SentinelIPS:
         if not newly_labelled.any():
             return chunk
         chunk.loc[newly_labelled, "sig_attack_type"] = "Bot"
+        if "pred_binary" in chunk.columns:
+            chunk.loc[newly_labelled, "pred_binary"] = 1
+        else:
+            chunk["pred_binary"] = newly_labelled.astype(int)
+        if "confidence" in chunk.columns:
+            chunk.loc[newly_labelled, "confidence"] = \
+                chunk.loc[newly_labelled, "confidence"].clip(lower=0.75)
+        else:
+            chunk.loc[newly_labelled, "confidence"] = 0.75
+        return chunk
+
+    def _run_dos(self, chunk: pd.DataFrame) -> pd.DataFrame:
+        """
+        Rule-based cross-flow DoS/DDoS detection. Layer 1's per-flow ML
+        features have no visibility into "same source opening
+        connections at a very high rate, repeatedly" -- confirmed live
+        2026-08-20/21: an hping3 SYN flood was reliably caught by the
+        binary model (an attack, something) but the multiclass model
+        couldn't name it, falling back to the generic ATTACK label with
+        no MITRE mapping and severity capped at MEDIUM (attack-type-keyed
+        lookups have nothing to match).
+
+        "dos_flagged" is populated by _run_live()'s main loop from
+        core.flow_collector.FlowCollector.connection_rate() (needs
+        cross-flow history the per-chunk DataFrame alone doesn't have) --
+        this is a no-op in simulate mode, where the column is simply
+        absent, same defensive pattern _run_beacon() already uses for
+        beacon_detected.
+
+        Naive fixed-rate threshold, tuned against this lab's own hping3
+        capture -- not validated against production-scale legitimate
+        traffic, and defeated by an attacker who deliberately throttles
+        below it. See
+        docs/superpowers/specs/2026-08-23-dos-ddos-multiclass-retrain-design.md
+        for the disclosed limitation and the production-readiness
+        follow-up (adaptive, baseline-relative thresholding) this doesn't
+        attempt to solve.
+
+        Lower confidence (0.75) than an exact signature match (0.90),
+        same reasoning as _run_beacon(): this is a statistical inference
+        over connection rate, not an exact pattern hit.
+        """
+        if "dos_flagged" not in chunk.columns:
+            return chunk
+        dos_mask = chunk["dos_flagged"].fillna(False).astype(bool)
+        if not dos_mask.any():
+            return chunk
+
+        chunk = chunk.copy()
+        if "sig_attack_type" not in chunk.columns:
+            chunk["sig_attack_type"] = None
+        # Don't override a more specific payload-signature match on the
+        # same flow -- same precedence beacon detection already uses
+        # relative to Layer 2 signatures.
+        newly_labelled = chunk["sig_attack_type"].isna() & dos_mask
+        if not newly_labelled.any():
+            return chunk
+        chunk.loc[newly_labelled, "sig_attack_type"] = "DoS"
         if "pred_binary" in chunk.columns:
             chunk.loc[newly_labelled, "pred_binary"] = 1
         else:
@@ -1124,6 +1185,25 @@ def _run_live(args) -> None:
         ]
         return flow_df
 
+    def _add_dos_column(flow_df: pd.DataFrame) -> pd.DataFrame:
+        """Cross-flow connection rate needs FlowCollector's connection
+        history, which only exists here (not inside
+        SentinelIPS.process_chunk(), which only ever sees one chunk at a
+        time) -- queried once per unique (src,dst) pair in this chunk,
+        same pattern as _add_beacon_column()."""
+        if "src_ip" not in flow_df.columns or "dst_ip" not in flow_df.columns:
+            return flow_df
+        pairs = flow_df[["src_ip", "dst_ip"]].drop_duplicates()
+        dos_map = {
+            (s, d): collector.connection_rate(s, d)["is_flood"]
+            for s, d in pairs.itertuples(index=False)
+        }
+        flow_df["dos_flagged"] = [
+            dos_map.get((s, d), False)
+            for s, d in zip(flow_df["src_ip"], flow_df["dst_ip"])
+        ]
+        return flow_df
+
     logger.info("Live mode active — press Ctrl+C to stop")
     try:
         while True:
@@ -1136,6 +1216,7 @@ def _run_live(args) -> None:
                 flow_df = pd.concat(frames, ignore_index=True)
                 flow_df = eng.transform(flow_df)
                 flow_df = _add_beacon_column(flow_df)
+                flow_df = _add_dos_column(flow_df)
                 ips.process_chunk(flow_df)
                 del flow_df
                 gc.collect()
@@ -1152,6 +1233,7 @@ def _run_live(args) -> None:
         final_df = collector.flush_all()
         if not final_df.empty:
             final_df = _add_beacon_column(eng.transform(final_df))
+            final_df = _add_dos_column(final_df)
             ips.process_chunk(final_df)
             del final_df
             gc.collect()

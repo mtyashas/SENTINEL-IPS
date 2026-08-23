@@ -83,5 +83,33 @@ assert not score3["is_flood"]
 assert score3["rate_per_sec"] is None, f"FAIL: expected None with insufficient history: {score3}"
 print("PASS: insufficient history correctly returns rate_per_sec=None")
 
+import pandas as pd
+
+from sentinel import SentinelIPS
+
+print()
+print("--- Check 4: _run_dos() promotes a flood-flagged flow to DoS ---")
+ips = SentinelIPS()  # no model_path needed -- _run_dos never touches layer1
+chunk = pd.DataFrame({
+    "dos_flagged":     [True, False],
+    "src_ip":          [SRC, SRC],
+    "destination_port": [80, 80],
+})
+result = ips._run_dos(chunk)
+assert result.iloc[0]["sig_attack_type"] == "DoS"
+assert result.iloc[0]["pred_binary"] == 1
+assert result.iloc[0]["confidence"] >= 0.75
+assert pd.isna(result.iloc[1]["sig_attack_type"]), "non-flagged row should be untouched"
+print(f"PASS: flood-flagged row -> sig_attack_type=DoS, confidence={result.iloc[0]['confidence']:.2f}; "
+      f"non-flagged row untouched")
+
+print()
+print("--- Check 5: chunk with no dos_flagged column (simulate mode) is a no-op ---")
+plain_chunk = pd.DataFrame({"src_ip": [SRC]})
+result = ips._run_dos(plain_chunk)
+assert "sig_attack_type" not in result.columns
+assert result.equals(plain_chunk)
+print("PASS: simulate-mode chunk (no dos_flagged column) passed through untouched")
+
 print()
 print("All checks passed.")
