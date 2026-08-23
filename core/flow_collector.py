@@ -125,6 +125,28 @@ _BEACON_MIN_CONNECTIONS     = 5      # minimum history before scoring at all
 _BEACON_MAX_CV              = 0.25   # interval coefficient-of-variation ceiling
 _BEACON_MIN_MEAN_INTERVAL_S = 2.0    # floor below which it's a scan, not a beacon
 
+# Cross-flow DoS/DDoS flood detection tuning. Reads the same _conn_history
+# beacon_score() uses, just interpreted as raw rate instead of regularity --
+# confirmed live 2026-08-20/21: an hping3 SYN flood was reliably caught by
+# the binary model but the multiclass model couldn't name it, falling back
+# to the generic ATTACK label, because one flood packet looks like one
+# failed connection attempt in isolation. _BEACON_MIN_MEAN_INTERVAL_S (2s)
+# deliberately excludes anything this fast from beacon scoring (a fast,
+# evenly-paced scan looks identical to a beacon by regularity alone) --
+# this constant is the signal for that excluded fast range.
+#
+# _DOS_RATE_THRESHOLD_PER_S is a naive threshold, same class of limitation
+# as _BEACON_MAX_CV: tuned against this lab's own hping3 capture, not
+# validated against production-scale legitimate traffic (many real users
+# behind one NAT gateway could plausibly open connections fast enough to
+# cross a poorly-chosen threshold), and defeated by an attacker who
+# deliberately throttles below it. See
+# docs/superpowers/specs/2026-08-23-dos-ddos-multiclass-retrain-design.md
+# for the disclosed limitation and the production-readiness follow-up
+# (adaptive, baseline-relative thresholding) this doesn't attempt to solve.
+_DOS_MIN_CONNECTIONS      = 2      # minimum history before scoring at all
+_DOS_RATE_THRESHOLD_PER_S = 10.0   # connections/sec at or above this = flood-shaped
+
 FlowKey = Tuple[str, int, str, int, int]   # (ip_a, port_a, ip_b, port_b, proto)
 
 
@@ -722,3 +744,24 @@ class FlowCollector:
         is_beacon = cv <= _BEACON_MAX_CV
         return {"conn_count": len(history), "is_beacon": is_beacon,
                 "interval_cv": round(cv, 4), "mean_interval_s": round(mean_interval, 2)}
+
+    def connection_rate(self, src_ip: str, dst_ip: str) -> dict:
+        """
+        Cross-flow connection-rate signal for one (src_ip, dst_ip) pair,
+        for DoS/DDoS flood detection (see _DOS_* constants above).
+
+        Inputs:  src_ip, dst_ip — the pair to score
+        Outputs: dict with conn_count, is_flood (bool), rate_per_sec
+                 (float, None if fewer than _DOS_MIN_CONNECTIONS
+                 connections recorded)
+        """
+        with self._lock:
+            history = list(self._conn_history.get((src_ip, dst_ip), ()))
+
+        if len(history) < _DOS_MIN_CONNECTIONS:
+            return {"conn_count": len(history), "is_flood": False, "rate_per_sec": None}
+
+        span = history[-1] - history[0]
+        rate = float(len(history)) if span <= 0 else (len(history) - 1) / span
+        is_flood = rate >= _DOS_RATE_THRESHOLD_PER_S
+        return {"conn_count": len(history), "is_flood": is_flood, "rate_per_sec": round(rate, 2)}
