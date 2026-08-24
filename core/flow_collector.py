@@ -155,6 +155,16 @@ _DOS_MIN_PORT_CONCENTRATION = 0.5    # share of conns on the single busiest
                                       # scan's connection *rate* alone looks
                                       # identical to a flood's.
 
+# DDoS multi-source correlation. A single flood-flagged source against one
+# destination is DoS; the actual definition of a *distributed* denial of
+# service is multiple sources flooding the same target concurrently.
+# Confirmed live 2026-08-25: two simultaneous hping3 floods against the
+# same target each correctly scored is_flood=True independently, but
+# nothing correlated them into a single coordinated-campaign label.
+_DDOS_MIN_SOURCES         = 2      # distinct concurrently-flooding sources -> DDoS
+_DDOS_CONCURRENT_WINDOW_S = 10.0   # how recently a source's own flood must
+                                   # have been seen to still count as "current"
+
 FlowKey = Tuple[str, int, str, int, int]   # (ip_a, port_a, ip_b, port_b, proto)
 
 
@@ -603,6 +613,10 @@ class FlowCollector:
             lambda: deque(maxlen=_BEACON_HISTORY_LEN)
         )
 
+        # dst_ip -> {src_ip: timestamp last flagged as flooding}, for DDoS
+        # multi-source correlation (see ddos_correlation()).
+        self._active_floods: Dict[str, Dict[str, float]] = defaultdict(dict)
+
         self._n_packets_seen     = 0
         self._n_flows_completed  = 0
         self._n_flows_evicted    = 0
@@ -796,6 +810,31 @@ class FlowCollector:
         port_concentration = Counter(ports).most_common(1)[0][1] / len(ports)
         is_flood = (rate >= _DOS_RATE_THRESHOLD_PER_S
                     and port_concentration >= _DOS_MIN_PORT_CONCENTRATION)
+        if is_flood:
+            with self._lock:
+                self._active_floods[dst_ip][src_ip] = timestamps[-1]
         return {"conn_count": len(history), "is_flood": is_flood,
                 "rate_per_sec": round(rate, 2),
                 "port_concentration": round(port_concentration, 2)}
+
+    def ddos_correlation(self, dst_ip: str, now: Optional[float] = None) -> dict:
+        """
+        Cross-source DDoS correlation for one destination IP: how many
+        DISTINCT source IPs are concurrently flood-flagged against it (see
+        connection_rate()). A single flooding source is DoS; multiple
+        concurrent ones flooding the same target is the actual definition
+        of a distributed denial of service.
+
+        Inputs:  dst_ip -- the destination to check
+                 now -- reference time for "concurrently" (defaults to
+                        time.time(); tests pass a fixed value for
+                        determinism)
+        Outputs: dict with distinct_flood_sources (int), is_ddos (bool)
+        """
+        if now is None:
+            now = time.time()
+        with self._lock:
+            sources = dict(self._active_floods.get(dst_ip, {}))
+        recent = [s for s, ts in sources.items() if now - ts <= _DDOS_CONCURRENT_WINDOW_S]
+        return {"distinct_flood_sources": len(recent),
+                "is_ddos": len(recent) >= _DDOS_MIN_SOURCES}

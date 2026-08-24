@@ -626,7 +626,13 @@ class SentinelIPS:
         cross-flow history the per-chunk DataFrame alone doesn't have) --
         this is a no-op in simulate mode, where the column is simply
         absent, same defensive pattern _run_beacon() already uses for
-        beacon_detected.
+        beacon_detected. "ddos_flagged" (also live-only, from
+        FlowCollector.ddos_correlation()) upgrades the label to DDoS when
+        multiple distinct sources are concurrently flooding the same
+        destination -- confirmed live 2026-08-25: two simultaneous hping3
+        floods against the same target each correctly scored as DoS
+        independently, but nothing correlated them into a single
+        coordinated-campaign label.
 
         Naive fixed-rate threshold, tuned against this lab's own hping3
         capture -- not validated against production-scale legitimate
@@ -657,6 +663,9 @@ class SentinelIPS:
         if not newly_labelled.any():
             return chunk
         chunk.loc[newly_labelled, "sig_attack_type"] = "DoS"
+        if "ddos_flagged" in chunk.columns:
+            ddos_upgrade = newly_labelled & chunk["ddos_flagged"].fillna(False).astype(bool)
+            chunk.loc[ddos_upgrade, "sig_attack_type"] = "DDoS"
         if "pred_binary" in chunk.columns:
             chunk.loc[newly_labelled, "pred_binary"] = 1
         else:
@@ -1313,6 +1322,11 @@ def _run_live(args) -> None:
             dos_map.get((s, d), False)
             for s, d in zip(flow_df["src_ip"], flow_df["dst_ip"])
         ]
+        # DDoS correlation is per-destination (how many distinct sources are
+        # concurrently flooding it), not per-(src,dst) pair like dos_flagged.
+        unique_dsts = flow_df["dst_ip"].dropna().unique()
+        ddos_map = {d: collector.ddos_correlation(d)["is_ddos"] for d in unique_dsts}
+        flow_df["ddos_flagged"] = flow_df["dst_ip"].map(ddos_map).fillna(False)
         return flow_df
 
     logger.info("Live mode active — press Ctrl+C to stop")
