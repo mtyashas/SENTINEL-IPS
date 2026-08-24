@@ -42,7 +42,7 @@ Usage:
 import logging
 import threading
 import time
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -144,8 +144,16 @@ _BEACON_MIN_MEAN_INTERVAL_S = 2.0    # floor below which it's a scan, not a beac
 # docs/superpowers/specs/2026-08-23-dos-ddos-multiclass-retrain-design.md
 # for the disclosed limitation and the production-readiness follow-up
 # (adaptive, baseline-relative thresholding) this doesn't attempt to solve.
-_DOS_MIN_CONNECTIONS      = 2      # minimum history before scoring at all
-_DOS_RATE_THRESHOLD_PER_S = 10.0   # connections/sec at or above this = flood-shaped
+_DOS_MIN_CONNECTIONS        = 2      # minimum history before scoring at all
+_DOS_RATE_THRESHOLD_PER_S   = 10.0   # connections/sec at or above this = flood-shaped
+_DOS_MIN_PORT_CONCENTRATION = 0.5    # share of conns on the single busiest
+                                      # port required to call it a flood,
+                                      # not a scan -- confirmed live
+                                      # 2026-08-24: without this, a fast
+                                      # nmap scan's PortScan label got
+                                      # silently overridden to DoS, since a
+                                      # scan's connection *rate* alone looks
+                                      # identical to a flood's.
 
 FlowKey = Tuple[str, int, str, int, int]   # (ip_a, port_a, ip_b, port_b, proto)
 
@@ -581,8 +589,16 @@ class FlowCollector:
         self._completed: List[dict] = []
         self._lock = threading.Lock()
 
-        # (src_ip, dst_ip) -> deque of connection start timestamps, for
-        # cross-flow beacon detection (see _BEACON_* constants / beacon_score()).
+        # (src_ip, dst_ip) -> deque of (timestamp, dst_port) per connection,
+        # for cross-flow beacon detection (see _BEACON_* constants /
+        # beacon_score()) and DoS/DDoS flood detection (see _DOS_*
+        # constants / connection_rate()). dst_port is tracked alongside the
+        # timestamp so connection_rate() can tell a real flood (many
+        # connections, one hammered port) from a port scan (many
+        # connections, many different ports) -- both have the same raw
+        # connection *rate*, confirmed live 2026-08-24 when a fast nmap
+        # scan's PortScan label got silently overridden to DoS on most of
+        # its flows because rate alone couldn't distinguish them.
         self._conn_history: Dict[Tuple[str, str], deque] = defaultdict(
             lambda: deque(maxlen=_BEACON_HISTORY_LEN)
         )
@@ -640,7 +656,7 @@ class FlowCollector:
                 state = _FlowState(pi)
                 self._flows[key] = state
                 self._creation_order.append(key)
-                self._conn_history[(pi.src_ip, pi.dst_ip)].append(pi.ts)
+                self._conn_history[(pi.src_ip, pi.dst_ip)].append((pi.ts, pi.dst_port))
             else:
                 state.ingest(pi)
 
@@ -723,7 +739,8 @@ class FlowCollector:
                  None if not enough history), mean_interval_s
         """
         with self._lock:
-            history = list(self._conn_history.get((src_ip, dst_ip), ()))
+            raw_history = list(self._conn_history.get((src_ip, dst_ip), ()))
+        history = [ts for ts, _port in raw_history]
 
         if len(history) < _BEACON_MIN_CONNECTIONS:
             return {"conn_count": len(history), "is_beacon": False,
@@ -753,15 +770,32 @@ class FlowCollector:
         Inputs:  src_ip, dst_ip — the pair to score
         Outputs: dict with conn_count, is_flood (bool), rate_per_sec
                  (float, None if fewer than _DOS_MIN_CONNECTIONS
-                 connections recorded)
+                 connections recorded), port_concentration (share of
+                 connections hitting the single most-hit port, None if not
+                 enough history)
         """
         with self._lock:
             history = list(self._conn_history.get((src_ip, dst_ip), ()))
 
         if len(history) < _DOS_MIN_CONNECTIONS:
-            return {"conn_count": len(history), "is_flood": False, "rate_per_sec": None}
+            return {"conn_count": len(history), "is_flood": False,
+                    "rate_per_sec": None, "port_concentration": None}
 
-        span = history[-1] - history[0]
-        rate = float(len(history)) if span <= 0 else (len(history) - 1) / span
-        is_flood = rate >= _DOS_RATE_THRESHOLD_PER_S
-        return {"conn_count": len(history), "is_flood": is_flood, "rate_per_sec": round(rate, 2)}
+        timestamps = [ts for ts, _port in history]
+        ports      = [port for _ts, port in history]
+
+        span = timestamps[-1] - timestamps[0]
+        rate = float(len(timestamps)) if span <= 0 else (len(timestamps) - 1) / span
+
+        # A real flood hammers one service (one port); a port scan probes
+        # many different ports on the same host at a similarly high rate --
+        # rate alone can't tell them apart. Require the connections to be
+        # concentrated on a small set of ports before calling it a flood;
+        # a scan's port diversity keeps its port_concentration low and
+        # leaves it for Layer 1's own PortScan classification instead.
+        port_concentration = Counter(ports).most_common(1)[0][1] / len(ports)
+        is_flood = (rate >= _DOS_RATE_THRESHOLD_PER_S
+                    and port_concentration >= _DOS_MIN_PORT_CONCENTRATION)
+        return {"conn_count": len(history), "is_flood": is_flood,
+                "rate_per_sec": round(rate, 2),
+                "port_concentration": round(port_concentration, 2)}

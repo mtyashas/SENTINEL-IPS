@@ -17,10 +17,22 @@ Purpose: Self-check for rule-based DoS/DDoS detection (2026-08-23,
          docs/superpowers/specs/2026-08-23-dos-ddos-multiclass-retrain-design.md's
          Revision History for why.
 
-         Confirms: (1) fast, regular connections (flood-shaped) score as
-         a flood, (2) slow/occasional connections (ordinary traffic)
-         don't, (3) too little history (below _DOS_MIN_CONNECTIONS)
-         returns rate_per_sec=None rather than a misleading 0.0.
+         Confirms: (1) fast, regular connections all hitting one port
+         (flood-shaped) score as a flood, (1b) fast connections spread
+         across many different ports (scan-shaped) do NOT score as a
+         flood despite an identical connection rate, (2) slow/occasional
+         connections (ordinary traffic) don't, (3) too little history
+         (below _DOS_MIN_CONNECTIONS) returns rate_per_sec=None rather
+         than a misleading 0.0.
+
+         Check 1b exists because of a real bug found live 2026-08-24: a
+         fast nmap PortScan's connection *rate* to the target IP is
+         indistinguishable from a flood's without also looking at *which
+         ports* were hit -- a scan spreads across many ports, a flood
+         hammers one. Without the port-concentration check, ~83% of a
+         live PortScan run's flows got their correct PortScan label
+         silently overridden to DoS (sig_attack_type wins over Layer 1's
+         attack_class in sentinel.py's _build_event()).
 
 Usage:
     python lab/verify_dos_detection.py
@@ -39,27 +51,39 @@ from core.flow_collector import FlowCollector
 SRC, DST = "192.168.56.10", "192.168.56.1"
 
 
-def make_connection(collector: FlowCollector, sport: int, ts: float) -> None:
-    """One minimal 2-packet 'connection' (SYN + RST) at a given src port
-    and timestamp -- enough for FlowCollector to register a new flow."""
-    syn = IP(src=SRC, dst=DST) / TCP(sport=sport, dport=80, flags="S", seq=1000)
+def make_connection(collector: FlowCollector, sport: int, ts: float, dport: int = 80) -> None:
+    """One minimal 2-packet 'connection' (SYN + RST) at a given src port,
+    timestamp, and (by default fixed) dest port -- enough for FlowCollector
+    to register a new flow."""
+    syn = IP(src=SRC, dst=DST) / TCP(sport=sport, dport=dport, flags="S", seq=1000)
     syn.time = ts
     collector.ingest_packet(syn)
-    rst = IP(src=DST, dst=SRC) / TCP(sport=80, dport=sport, flags="R", seq=5000, ack=1001)
+    rst = IP(src=DST, dst=SRC) / TCP(sport=dport, dport=sport, flags="R", seq=5000, ack=1001)
     rst.time = ts + 0.001
     collector.ingest_packet(rst)
 
 
-print("--- Check 1: fast, regular connections (flood-shaped) score as a flood ---")
+print("--- Check 1: fast, regular connections all hitting ONE port (flood-shaped) score as a flood ---")
 collector = FlowCollector()
 base = 1_000_000.0
 for i in range(10):
-    make_connection(collector, sport=40000 + i, ts=base + i * 0.01)   # 100 conns/sec
+    make_connection(collector, sport=40000 + i, ts=base + i * 0.01, dport=80)   # 100 conns/sec, all port 80
 score = collector.connection_rate(SRC, DST)
 print(f"Flood-shaped: {score}")
 assert score["is_flood"], f"FAIL: fast repeated connections not flagged as a flood: {score}"
 assert score["rate_per_sec"] > 50.0, f"FAIL: expected rate well above threshold: {score}"
-print("PASS: fast, regular connections correctly flagged as a flood")
+print("PASS: fast, regular, single-port connections correctly flagged as a flood")
+
+print()
+print("--- Check 1b: fast connections spread across MANY ports (scan-shaped) do NOT score as a flood ---")
+collector_scan = FlowCollector()
+for i in range(10):
+    make_connection(collector_scan, sport=40000 + i, ts=base + i * 0.01, dport=100 + i)   # same rate, 10 different ports
+score_scan = collector_scan.connection_rate(SRC, DST)
+print(f"Scan-shaped: {score_scan}")
+assert score_scan["rate_per_sec"] > 50.0, f"FAIL: expected the same high rate as the flood case: {score_scan}"
+assert not score_scan["is_flood"], f"FAIL: port-scan-shaped connections incorrectly flagged as a flood: {score_scan}"
+print("PASS: fast, multi-port (scan-shaped) connections correctly NOT flagged as a flood, despite matching the flood's rate")
 
 print()
 print("--- Check 2: slow/occasional connections (ordinary traffic) do NOT score as a flood ---")
