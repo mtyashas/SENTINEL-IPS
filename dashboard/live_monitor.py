@@ -75,6 +75,14 @@ class DetectionEvent:
             "tactic":      self.mitre_tactic,
             "risk":        f"{self.risk_score:.1f}",
             "action":      self.action,
+            # attribution.threat_profiler.ThreatActorProfiler already
+            # classifies every attacker (APT/Organised/ScriptKiddie/
+            # Insider) and sentinel.py already pushes both fields into
+            # every event -- they landed in `extra` via push_event()'s
+            # generic passthrough but were never surfaced here, so the
+            # dashboard never showed them despite the data existing.
+            "actor_class":    self.extra.get("actor_class", "Unknown"),
+            "sophistication": self.extra.get("sophistication", 0),
         }
 
 
