@@ -156,6 +156,8 @@ _BLOCK_ACTION_DURATIONS = {
 # those -- it only checks injection patterns, not URL-shape indicators).
 _REQUEST_LINE_RE = re.compile(r"^(?:GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH)\s+(\S+)\s+HTTP/")
 
+_EXFIL_BYTES_THRESHOLD = 5_000_000   # 5MB combined fwd+bwd bytes per flow
+
 
 # ---------------------------------------------------------------------------
 # SENTINEL engine
@@ -338,6 +340,9 @@ class SentinelIPS:
 
         # --- DoS/DDoS detection on cross-flow connection rate ---
         chunk = self._run_dos(chunk)
+
+        # --- Exfiltration detection on single-flow byte volume ---
+        chunk = self._run_exfil(chunk)
 
         # --- Layer 3: anomaly detection (fit on first non-trivial chunk) ---
         chunk = self._run_anomaly(chunk)
@@ -647,6 +652,62 @@ class SentinelIPS:
                 chunk.loc[newly_labelled, "confidence"].clip(lower=0.75)
         else:
             chunk.loc[newly_labelled, "confidence"] = 0.75
+        return chunk
+
+    def _run_exfil(self, chunk: pd.DataFrame) -> pd.DataFrame:
+        """
+        Rule-based large-transfer detection. Unlike DoS/Beacon, this needs
+        no cross-flow state -- a single flow's own byte-count features
+        (already computed by FlowCollector for every flow, live or
+        simulated) are sufficient signal on their own.
+
+        Naive threshold, deliberately lower confidence (0.60) than an exact
+        signature match (0.90) or even the rate-based DoS/Beacon overrides
+        (0.75): total bytes transferred alone can't distinguish data theft
+        from an ordinary bulk download or backup job. This is a "flag for
+        review" signal (action=log, no auto-block), not a high-confidence
+        verdict.
+
+        Known limitation: this runs after process_chunk()'s own
+        self-traffic exclusion filter (added 2026-08-24), which drops any
+        flow where src_ip matches the protected server's own IP -- so a
+        compromised server exfiltrating its own data outward is currently
+        invisible to this check, since that traffic has exactly the shape
+        the noise filter was built to suppress. Not fixed here: doing so
+        needs the self-traffic filter to distinguish ordinary self-noise
+        from an unusually large self-originated transfer, its own
+        threshold-tuning problem. This check does catch the more common
+        testable case instead: an external attacker pulling a large volume
+        of data FROM the server.
+        """
+        fwd_col, bwd_col = "total_length_of_fwd_packets", "total_length_of_bwd_packets"
+        if fwd_col not in chunk.columns and bwd_col not in chunk.columns:
+            return chunk
+
+        total_bytes = chunk.get(fwd_col, 0).fillna(0) + chunk.get(bwd_col, 0).fillna(0)
+        exfil_mask = total_bytes >= _EXFIL_BYTES_THRESHOLD
+        if not exfil_mask.any():
+            return chunk
+
+        chunk = chunk.copy()
+        if "sig_attack_type" not in chunk.columns:
+            chunk["sig_attack_type"] = None
+        # Exfiltration is the lowest-confidence rule-based override -- never
+        # steal a more specific detection's label, same precedence pattern
+        # beacon/DoS already use.
+        newly_labelled = chunk["sig_attack_type"].isna() & exfil_mask
+        if not newly_labelled.any():
+            return chunk
+        chunk.loc[newly_labelled, "sig_attack_type"] = "Exfiltration"
+        if "pred_binary" in chunk.columns:
+            chunk.loc[newly_labelled, "pred_binary"] = 1
+        else:
+            chunk["pred_binary"] = newly_labelled.astype(int)
+        if "confidence" in chunk.columns:
+            chunk.loc[newly_labelled, "confidence"] = \
+                chunk.loc[newly_labelled, "confidence"].clip(lower=0.60)
+        else:
+            chunk.loc[newly_labelled, "confidence"] = 0.60
         return chunk
 
     # ------------------------------------------------------------------

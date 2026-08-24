@@ -275,6 +275,7 @@ RESPONSE_MATRIX: dict[str, list[str]] = {
     # CSRF branch invalidates the session instead and never reaches the
     # generic block logic at all.
     "CSRF":         ["invalidate_session", "alert_medium"],
+    "Exfiltration": ["log", "alert_medium"],
 }
 
 # ---------------------------------------------------------------------------
@@ -284,7 +285,7 @@ RESPONSE_MATRIX: dict[str, list[str]] = {
 SEVERITY_LEVELS: dict[str, list[str]] = {
     "CRITICAL": ["Infiltration", "ZeroDay", "Heartbleed", "APT", "Honeypot", "WebShell"],
     "HIGH":     ["DDoS", "DoS", "Bot", "Ransomware", "CommandInject", "PathTraversal"],
-    "MEDIUM":   ["BruteForce", "SQLInjection", "XSS", "CSRF"],
+    "MEDIUM":   ["BruteForce", "SQLInjection", "XSS", "CSRF", "Exfiltration"],
     "LOW":      ["PortScan", "Phishing"],
     "INFO":     ["Reconnaissance"],
 }
