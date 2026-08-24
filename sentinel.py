@@ -31,6 +31,7 @@ import ast
 import gc
 import logging
 import re
+import socket
 import sys
 import time
 from pathlib import Path
@@ -257,6 +258,28 @@ class SentinelIPS:
         self._monitor   = LiveMonitor()
         self._amap      = AttackMap()
 
+        # --- Own IP (to exclude self-originated traffic from detection) ---
+        # A server's own outbound requests (e.g. the geolocator's API calls,
+        # or just ordinary background traffic on the protected machine) are
+        # not attacks on itself. Confirmed live 2026-08-24: self-traffic was
+        # getting misclassified as Phishing/PortScan/DoS across all three
+        # detection paths at once, because the live capture filter has no
+        # subnet restriction and sniffs this machine's own outbound packets
+        # along with real inbound traffic. Resolved once here via a
+        # connect-then-read-local-address trick (sends nothing, works
+        # offline) rather than trusting a hostname lookup, which can
+        # resolve to the wrong adapter on a multi-homed machine.
+        self._own_ip: Optional[str] = None
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                self._own_ip = s.getsockname()[0]
+            logger.info("Own IP resolved: %s (self-originated flows excluded "
+                        "from detection)", self._own_ip)
+        except OSError as exc:
+            logger.warning("Could not resolve own IP -- self-traffic "
+                            "exclusion disabled: %s", exc)
+
         # --- Internal counters ---
         self._n_flows         = 0
         self._n_attacks       = 0
@@ -293,6 +316,16 @@ class SentinelIPS:
         """
         if chunk.empty:
             return chunk
+
+        # Exclude this machine's own outbound traffic before any detection
+        # layer runs -- one guard here fixes the self-noise for Layer 1,
+        # Layer 2 signatures, beacon, and DoS all at once, rather than
+        # patching each detection path separately. No-op if src_ip wasn't
+        # captured (simulate mode) or own-IP resolution failed at startup.
+        if self._own_ip and "src_ip" in chunk.columns:
+            chunk = chunk[chunk["src_ip"] != self._own_ip]
+            if chunk.empty:
+                return chunk
 
         # --- Layer 1: ML inference ---
         chunk = self._run_layer1(chunk)
