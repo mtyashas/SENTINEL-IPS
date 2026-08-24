@@ -23,6 +23,7 @@ Usage:
 import ipaddress
 import logging
 import re
+from collections import OrderedDict
 from typing import Dict, List, Optional
 from urllib.parse import unquote, urlparse
 
@@ -129,6 +130,12 @@ _CSRF_SESSION_COOKIE_RE = re.compile(r"\bsession=([^;\s]+)", re.IGNORECASE)
 _CSRF_HOST_RE   = re.compile(r"^Host:\s*([^\s:]+)", re.MULTILINE | re.IGNORECASE)
 _CSRF_ORIGIN_RE = re.compile(r"^(?:Origin|Referer):\s*(\S+)", re.MULTILINE | re.IGNORECASE)
 
+_SESSION_HISTORY_MAX_ENTRIES = 500   # bounds self._session_last_ip's growth
+                                      # on a long-running server -- same class
+                                      # of concern _conn_history's bounded
+                                      # deques already address for beacon/DoS
+                                      # in core/flow_collector.py.
+
 # ---------------------------------------------------------------------------
 # Severity lookup per attack type
 # ---------------------------------------------------------------------------
@@ -174,6 +181,24 @@ def _detection(attack_type: str, pattern: str) -> Dict:
     }
 
 
+def _extract_session_cookie(raw_request: str) -> Optional[str]:
+    """
+    Pull the session-identifying cookie value out of a raw HTTP request,
+    shared by check_csrf() and check_session_hijack() so the extraction
+    logic exists in exactly one place.
+
+    Falls back to the whole Cookie header when no cookie is specifically
+    named "session" -- still a usable opaque identifier, just less precise
+    than the named case.
+    """
+    cookie_match = _CSRF_COOKIE_RE.search(raw_request)
+    if not cookie_match:
+        return None
+    cookie_header = cookie_match.group(1).strip()
+    session_match = _CSRF_SESSION_COOKIE_RE.search(cookie_header)
+    return session_match.group(1) if session_match else cookie_header
+
+
 class SignatureDetector:
     """
     Layer 2 of the SENTINEL detection engine — signature matching.
@@ -217,6 +242,12 @@ class SignatureDetector:
         self._brute_re: List[re.Pattern] = [
             re.compile(p, flags) for p in _BRUTE_FORCE_HEADER_PATTERNS
         ]
+
+        # session token -> last source IP seen using it, for
+        # check_session_hijack(). Bounded/LRU-evicted via OrderedDict, not a
+        # plain dict, so a long-running server's session history doesn't
+        # grow forever.
+        self._session_last_ip: "OrderedDict[str, str]" = OrderedDict()
 
         logger.info(
             "SignatureDetector initialised — SQL:%d XSS:%d CMD:%d PATH:%d SHELL:%d",
@@ -418,15 +449,9 @@ class SignatureDetector:
         if not any(path.startswith(p) for p in _CSRF_SENSITIVE_PATH_PREFIXES):
             return _no_detection()
 
-        cookie_match = _CSRF_COOKIE_RE.search(raw_request)
-        if not cookie_match:
+        session_token = _extract_session_cookie(raw_request)
+        if session_token is None:
             return _no_detection()   # no session to forge -- nothing at risk
-        cookie_header = cookie_match.group(1).strip()
-        session_match = _CSRF_SESSION_COOKIE_RE.search(cookie_header)
-        # Falls back to the whole Cookie header when no cookie is
-        # specifically named "session" -- still a usable opaque identifier
-        # for invalidation, just not as precise as the named-cookie case.
-        session_token = session_match.group(1) if session_match else cookie_header
 
         host_match   = _CSRF_HOST_RE.search(raw_request)
         host         = host_match.group(1) if host_match else ""
@@ -437,6 +462,53 @@ class SignatureDetector:
                 return _no_detection()   # same-origin Referer/Origin -- legitimate
 
         result = _detection("CSRF", f"{method} {path} (no matching Origin/Referer)")
+        result["session_token"] = session_token
+        return result
+
+    def check_session_hijack(self, raw_request: str, src_ip: str) -> Dict:
+        """
+        Detect an existing session cookie suddenly being used from a
+        different source IP -- the classic signature of a stolen or
+        replayed session token. Unlike check_csrf() (a structural
+        header-mismatch check, not tied to a specific cookie value), this
+        tracks *continuity*: the same session token seen from a new src_ip
+        it wasn't previously bound to.
+
+        Checked against every request carrying a session cookie, not just
+        state-changing requests to sensitive paths (check_csrf()'s scope)
+        -- hijacking is meaningful on any authenticated request, not just
+        ones that change state.
+
+        Known limitation, same class as beacon_score()'s/connection_rate()'s
+        own heuristics: a real client switching networks mid-session (WiFi
+        to mobile) produces an identical signature to a stolen cookie -- no
+        way to distinguish the two from network-layer data alone. Behind a
+        NAT/proxy chain, the src_ip this sees may not be the true client IP
+        either.
+
+        Inputs:  raw_request -- full raw HTTP request text (payload_sample)
+                 src_ip -- the flow's source IP
+        Outputs: detection dict, plus "session_token" when detected (same
+                 field CSRF uses -- the response is identical: invalidate
+                 the session, never block src_ip, since src_ip here might
+                 be the legitimate user who just changed networks, not the
+                 thief)
+        """
+        session_token = _extract_session_cookie(raw_request)
+        if session_token is None:
+            return _no_detection()
+
+        last_ip = self._session_last_ip.get(session_token)
+        self._session_last_ip[session_token] = src_ip
+        self._session_last_ip.move_to_end(session_token)
+        if len(self._session_last_ip) > _SESSION_HISTORY_MAX_ENTRIES:
+            self._session_last_ip.popitem(last=False)
+
+        if last_ip is None or last_ip == src_ip:
+            return _no_detection()   # first sighting, or same IP as before
+
+        result = _detection("Session Hijacking",
+                             f"session cookie switched from {last_ip} to {src_ip}")
         result["session_token"] = session_token
         return result
 

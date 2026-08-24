@@ -276,6 +276,7 @@ RESPONSE_MATRIX: dict[str, list[str]] = {
     # generic block logic at all.
     "CSRF":         ["invalidate_session", "alert_medium"],
     "Exfiltration": ["log", "alert_medium"],
+    "Session Hijacking": ["invalidate_session", "alert_medium"],
 }
 
 # ---------------------------------------------------------------------------
@@ -285,7 +286,7 @@ RESPONSE_MATRIX: dict[str, list[str]] = {
 SEVERITY_LEVELS: dict[str, list[str]] = {
     "CRITICAL": ["Infiltration", "ZeroDay", "Heartbleed", "APT", "Honeypot", "WebShell"],
     "HIGH":     ["DDoS", "DoS", "Bot", "Ransomware", "CommandInject", "PathTraversal"],
-    "MEDIUM":   ["BruteForce", "SQLInjection", "XSS", "CSRF", "Exfiltration"],
+    "MEDIUM":   ["BruteForce", "SQLInjection", "XSS", "CSRF", "Exfiltration", "Session Hijacking"],
     "LOW":      ["PortScan", "Phishing"],
     "INFO":     ["Reconnaissance"],
 }

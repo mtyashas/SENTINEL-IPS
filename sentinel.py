@@ -471,6 +471,7 @@ class SentinelIPS:
             return chunk
         try:
             has_dst_ip = "dst_ip" in chunk.columns
+            has_src_ip = "src_ip" in chunk.columns
             sig_types   = pd.Series(None, index=chunk.index, dtype=object)
             csrf_tokens = pd.Series(None, index=chunk.index, dtype=object)
             for idx, payload in chunk["payload_sample"].items():
@@ -497,6 +498,19 @@ class SentinelIPS:
                     sig_types.at[idx]   = csrf_hit["attack_type"]
                     csrf_tokens.at[idx] = csrf_hit.get("session_token", "")
                     continue
+
+                # Session Hijacking checked next, also structural (cookie
+                # continuity, not payload content) -- csrf_tokens is
+                # intentionally reused for both attack types, since
+                # _build_event()/_run_response() need the same session_token
+                # field either way.
+                if has_src_ip:
+                    hijack_hit = self._sig.check_session_hijack(
+                        payload, chunk.at[idx, "src_ip"])
+                    if hijack_hit["detected"]:
+                        sig_types.at[idx]   = hijack_hit["attack_type"]
+                        csrf_tokens.at[idx] = hijack_hit.get("session_token", "")
+                        continue
 
                 hit = self._sig.check_payload(payload)
                 if not hit["detected"]:
@@ -799,10 +813,13 @@ class SentinelIPS:
                 "timestamp":   time.time(),
                 "flow_bytes":  float(row.get("flow_bytes_per_s", 0)),
             }
-            if attack_type == "CSRF":
-                # The response layer needs this to invalidate the forged
+            if attack_type in ("CSRF", "Session Hijacking"):
+                # The response layer needs this to invalidate the affected
                 # session instead of blocking src_ip (see _run_response) --
-                # src_ip here is the victim's browser, not the attacker's.
+                # for CSRF, src_ip is the victim's browser; for Session
+                # Hijacking, src_ip might be the legitimate user who just
+                # changed networks, not the thief. Neither should ever be
+                # IP-blocked on this signal alone.
                 event["session_token"] = str(row.get("csrf_session_token", ""))
             return event
         except Exception as exc:
@@ -920,20 +937,20 @@ class SentinelIPS:
         except Exception:
             pass
 
-        if attack == "CSRF":
-            # The request that reaches us in a CSRF attack came from the
-            # *victim's own browser*, not the attacker's machine -- every
-            # other branch below blocks src_ip, which here would block the
-            # victim. The correct countermeasure is session-level: kill the
-            # forged request's session token so it (and any further replay)
-            # stops being accepted, then alert. No IP block, ever, for this
-            # attack type.
+        if attack in ("CSRF", "Session Hijacking"):
+            # Neither attack type's src_ip is safe to block: a CSRF
+            # request's src_ip is the victim's own browser, and a session
+            # hijack's src_ip might just as easily be the legitimate user
+            # who changed networks as the actual thief. The correct
+            # countermeasure for both is session-level: kill the affected
+            # session token so it (and any further replay) stops being
+            # accepted, then alert. No IP block, ever, for either.
             token = event.get("session_token", "")
             if token:
                 try:
                     self._terminator.invalidate_session(token)
                 except Exception as exc:
-                    logger.debug("CSRF session invalidation failed: %s", exc)
+                    logger.debug("Session invalidation failed (%s): %s", attack, exc)
             try:
                 self._dispatcher.dispatch({
                     "attack_type": attack,
