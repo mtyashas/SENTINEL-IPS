@@ -400,10 +400,24 @@ SQL_INJECTION_PATTERNS: list[str] = [
     # confirmed live when a plain 6MB /dev/urandom upload (nothing
     # SQLi-shaped at all) got flagged SQLInjection purely from its MIME
     # boundary syntax, stealing the label from the new Exfiltration check.
-    # Quote markers alone still catch real SQLi here; "--" as a comment
-    # terminator still works in context via the second pattern below,
-    # which requires it to follow "param=" rather than appear bare anywhere.
-    r"((\%3D)|(=))[^\n]*((\%27)|(\')|(\-\-))",
+    # Quote markers alone still catch real SQLi here.
+    #
+    # The second pattern below turned out to have the *same* collision one
+    # level up, from a different angle: curl's own request header declares
+    # the boundary as "Content-Type: ...; boundary=------...<random>", which
+    # satisfies "param=" followed eventually by "--" just as well as real
+    # SQLi does, and this arrives in the very first captured packet (curl
+    # sends "Expect: 100-continue" before the actual file body, so
+    # payload_sample -- always just the first data-carrying packet -- is
+    # pure header text, never binary). A second, unconditional "--"-after-
+    # "--" removal would have also silently dropped detection for numeric-
+    # context SQLi with no quote at all (e.g. "id=5--"), a real technique
+    # that doesn't need a quote to break out of since it's never quoted to
+    # begin with. Fixed instead by requiring the dashes be followed by
+    # whitespace/end-of-string, not more boundary-token characters --
+    # verified this keeps "id=5--" and "id=5--\r\n..." detected while
+    # rejecting "boundary=------<random>".
+    r"((\%3D)|(=))[^\n]*((\%27)|(\')|(\-\-)(?=\s|$))",
     r"UNION.+SELECT",
     r"INSERT\s+INTO",
     r"DROP\s+TABLE",
