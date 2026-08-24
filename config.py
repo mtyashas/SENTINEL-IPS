@@ -384,7 +384,7 @@ LAB_HOST_ONLY_SUBNET   = "192.168.56.0/24"   # reference only — see lab/README
 # ---------------------------------------------------------------------------
 
 SQL_INJECTION_PATTERNS: list[str] = [
-    r"(\%27)|(\')|(\-\-)|(\%23)|(#)",
+    r"(\%27)|(\')|(\%23)|(#)",
     # Bare ";"/"%3B" deliberately excluded from this alternation: a
     # semicolon after "param=" is exactly as consistent with shell command
     # chaining as with SQL statement stacking (confirmed live -- a pure
@@ -394,6 +394,15 @@ SQL_INJECTION_PATTERNS: list[str] = [
     # and stay; stacked-query detection without those still works via the
     # keyword-anchored ";\s*(DROP|DELETE|UPDATE|INSERT)" pattern in
     # detection/layer2_signatures.py's _EXTRA_SQL_PATTERNS.
+    #
+    # Bare "--" also deliberately excluded here (removed 2026-08-25): every
+    # multipart/form-data file upload's boundary line starts with "--" --
+    # confirmed live when a plain 6MB /dev/urandom upload (nothing
+    # SQLi-shaped at all) got flagged SQLInjection purely from its MIME
+    # boundary syntax, stealing the label from the new Exfiltration check.
+    # Quote markers alone still catch real SQLi here; "--" as a comment
+    # terminator still works in context via the second pattern below,
+    # which requires it to follow "param=" rather than appear bare anywhere.
     r"((\%3D)|(=))[^\n]*((\%27)|(\')|(\-\-))",
     r"UNION.+SELECT",
     r"INSERT\s+INTO",
