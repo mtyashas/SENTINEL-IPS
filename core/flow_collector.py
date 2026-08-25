@@ -817,7 +817,7 @@ class FlowCollector:
                 "rate_per_sec": round(rate, 2),
                 "port_concentration": round(port_concentration, 2)}
 
-    def ddos_correlation(self, dst_ip: str, now: Optional[float] = None) -> dict:
+    def ddos_correlation(self, dst_ip: str) -> dict:
         """
         Cross-source DDoS correlation for one destination IP: how many
         DISTINCT source IPs are concurrently flood-flagged against it (see
@@ -825,16 +825,27 @@ class FlowCollector:
         concurrent ones flooding the same target is the actual definition
         of a distributed denial of service.
 
+        Recency is measured against the most recent recorded flood
+        timestamp for this destination, not wall-clock time.time() --
+        confirmed live 2026-08-25: under a genuine high-volume flood,
+        open_flows backlogs into the tens of thousands (same phenomenon
+        documented 2026-08-24), so a chunk gets processed minutes after its
+        packets were actually captured. Comparing against time.time() (the
+        processing moment) made every flood look stale relative to "now"
+        even when two sources were genuinely flooding within the same
+        second at capture time -- two real overlapping floods were checked
+        this way and neither ever correlated as DDoS, only DoS. Anchoring
+        to the flood data's own latest timestamp instead makes the check
+        immune to how far behind processing has fallen.
+
         Inputs:  dst_ip -- the destination to check
-                 now -- reference time for "concurrently" (defaults to
-                        time.time(); tests pass a fixed value for
-                        determinism)
         Outputs: dict with distinct_flood_sources (int), is_ddos (bool)
         """
-        if now is None:
-            now = time.time()
         with self._lock:
             sources = dict(self._active_floods.get(dst_ip, {}))
-        recent = [s for s, ts in sources.items() if now - ts <= _DDOS_CONCURRENT_WINDOW_S]
+        if not sources:
+            return {"distinct_flood_sources": 0, "is_ddos": False}
+        latest = max(sources.values())
+        recent = [s for s, ts in sources.items() if latest - ts <= _DDOS_CONCURRENT_WINDOW_S]
         return {"distinct_flood_sources": len(recent),
                 "is_ddos": len(recent) >= _DDOS_MIN_SOURCES}

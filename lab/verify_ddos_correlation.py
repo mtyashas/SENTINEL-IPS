@@ -52,7 +52,7 @@ collector = FlowCollector()
 base = 1_000_000.0
 make_flood(collector, SRC_A, DST, base)
 assert collector.connection_rate(SRC_A, DST)["is_flood"], "setup failed: SRC_A should be flood-flagged"
-result = collector.ddos_correlation(DST, now=base + 1.0)
+result = collector.ddos_correlation(DST)
 assert result["distinct_flood_sources"] == 1, f"FAIL: expected 1 source, got {result}"
 assert not result["is_ddos"], f"FAIL: a single flooding source should not be DDoS: {result}"
 print(f"PASS: single source correctly NOT correlated as DDoS ({result})")
@@ -61,18 +61,55 @@ print()
 print("--- Check 2: two distinct sources flooding the same destination concurrently ARE correlated ---")
 make_flood(collector, SRC_B, DST, base + 0.5)
 assert collector.connection_rate(SRC_B, DST)["is_flood"], "setup failed: SRC_B should be flood-flagged"
-result2 = collector.ddos_correlation(DST, now=base + 1.0)
+result2 = collector.ddos_correlation(DST)
 assert result2["distinct_flood_sources"] == 2, f"FAIL: expected 2 sources, got {result2}"
 assert result2["is_ddos"], f"FAIL: two concurrent flooding sources should be DDoS: {result2}"
 print(f"PASS: two concurrent sources correctly correlated as DDoS ({result2})")
 
 print()
-print("--- Check 3: a source outside the concurrent window no longer counts ---")
-result3 = collector.ddos_correlation(DST, now=base + 500.0)
-assert result3["distinct_flood_sources"] == 0, \
-    f"FAIL: old floods should have aged out of the concurrent window: {result3}"
-assert not result3["is_ddos"]
-print(f"PASS: floods outside the concurrent window correctly excluded ({result3})")
+print("--- Check 3: an old flood ages out once a new single source floods much later ---")
+# Recency is measured against the most recent recorded flood, not
+# wall-clock "now" (see Check 3b) -- so aging-out is tested by giving the
+# dict a genuinely NEW latest entry, not by querying further into a void
+# where nothing new happened.
+make_flood(collector, SRC_C, DST, base + 500.0)
+assert collector.connection_rate(SRC_C, DST)["is_flood"], "setup failed: SRC_C should be flood-flagged"
+result3 = collector.ddos_correlation(DST)
+assert result3["distinct_flood_sources"] == 1, \
+    f"FAIL: SRC_A/SRC_B's old floods should have aged out relative to SRC_C's fresh one: {result3}"
+assert not result3["is_ddos"], f"FAIL: only one source is current now, should not be DDoS: {result3}"
+print(f"PASS: old floods correctly aged out once a new single source's flood became the latest ({result3})")
+
+print()
+print("--- Check 3b: correlation still holds under processing backlog (real bug found live 2026-08-25) ---")
+# Confirmed live during demo dry-run: two genuinely-overlapping floods (both
+# captured within the same second) got labeled DoS only, never DDoS, twice
+# in a row -- even with tight room-coordinated timing. Root cause: under a
+# heavy flood, open_flows backlogs into the tens of thousands (same
+# phenomenon documented 2026-08-24), so by the time a chunk is actually
+# processed, wall-clock time.time() is minutes past the packets' real
+# capture time. The old ddos_correlation() compared each source's flood
+# timestamp against time.time() ("now"), so a backlogged chunk always saw
+# both floods as stale relative to processing time, even though they were
+# genuinely concurrent at capture time.
+collector3 = FlowCollector()
+backlog_base = 2_000_000.0
+make_flood(collector3, SRC_A, DST, backlog_base)
+assert collector3.connection_rate(SRC_A, DST)["is_flood"], "setup failed: SRC_A should be flood-flagged"
+make_flood(collector3, SRC_B, DST, backlog_base + 0.5)
+assert collector3.connection_rate(SRC_B, DST)["is_flood"], "setup failed: SRC_B should be flood-flagged"
+# Processing happens well after capture -- simulates a real backlog, not
+# the instant-processing assumption Checks 1-3 exercise. No "now" override
+# needed or possible any more: the fix removed wall-clock comparison
+# entirely, so this check just confirms correlation doesn't care how long
+# ago the underlying floods were captured, only that they're close to
+# EACH OTHER.
+result_backlog = collector3.ddos_correlation(DST)
+assert result_backlog["distinct_flood_sources"] == 2, \
+    f"FAIL: backlog must not break correlation -- both sources are only 0.5s apart at CAPTURE time: {result_backlog}"
+assert result_backlog["is_ddos"], \
+    f"FAIL: two genuinely-concurrent floods incorrectly NOT correlated under backlog: {result_backlog}"
+print(f"PASS: correlation holds even when checked long after capture ({result_backlog})")
 
 print()
 print("--- Check 4: sentinel.py._run_dos() upgrades DoS to DDoS when correlated ---")
